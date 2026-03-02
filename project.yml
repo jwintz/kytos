@@ -1,0 +1,76 @@
+name: Kytos
+options:
+  bundleIdPrefix: com.kytos
+  deploymentTarget:
+    macOS: 26.0
+    iOS: 26.0
+packages:
+  Kelyphos:
+    path: ../kelyphos
+  pane:
+    path: Submodules/Pane
+
+  SwiftTerm:
+    path: Submodules/SwiftTerm
+
+targets:
+  Kytos-macOS:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/KytosApp
+    dependencies:
+      - package: Kelyphos
+        product: KelyphosKit
+      - package: pane
+        product: pane
+      - package: SwiftTerm
+        product: SwiftTerm
+    postBuildScripts:
+      - name: Build mksh
+        script: |
+          cd ${SRCROOT}/Submodules/mksh
+          export CFLAGS="-Wno-implicit-function-declaration -Wno-int-conversion"
+          export LDFLAGS=""
+          export CC="clang"
+          sh Build.sh -r
+          mkdir -p ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}
+          cp mksh ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin
+          codesign --force --sign - ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin
+
+    info:
+      path: Sources/KytosApp/Info.plist
+      properties:
+        LSApplicationCategoryType: public.app-category.utilities
+        NSPrincipalClass: NSApplication
+    entitlements:
+      path: Sources/KytosApp/Kytos.entitlements
+
+  Kytos-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/KytosApp
+    dependencies:
+      - package: Kelyphos
+        product: KelyphosKit
+      - package: pane
+        product: pane
+      - package: SwiftTerm
+        product: SwiftTerm
+    postBuildScripts:
+      - name: Build mksh
+        script: |
+          cd ${SRCROOT}/Submodules/mksh
+          export CFLAGS="-Wno-implicit-function-declaration -Wno-int-conversion"
+          export LDFLAGS=""
+          export CC="clang"
+          sh Build.sh -r
+          mkdir -p ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}
+          cp mksh ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin
+          codesign --force --sign - ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin
+    info:
+      path: Sources/KytosApp/Info.plist
+      properties:
+        UIApplicationSupportsMultipleScenes: true
+        UILaunchScreen: {}

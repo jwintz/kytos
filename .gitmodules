@@ -1,0 +1,6 @@
+[submodule "Submodules/Pane"]
+	path = Submodules/Pane
+	url = https://github.com/migueldeicaza/Pane.git
+[submodule "Submodules/mksh"]
+	path = Submodules/mksh
+	url = https://github.com/MirBSD/mksh.git

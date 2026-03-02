@@ -1,0 +1,29 @@
+# Xcode
+.DS_Store
+build/
+*.pbxproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+*.xcbuilddata
+*.xccheckout
+*.xcscmblueprint
+project.xcworkspace/
+Kytos.xcodeproj/
+
+# Swift Package Manager
+.build/
+Packages/
+Package.pins
+Package.resolved
+
+# Syntropment Custom Tooling
+.gemini/
+*.log
+
+# Build Artifacts
+mksh_bin
+*.o
+*.a
+*.dylib
+*.app
