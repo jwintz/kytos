@@ -21,17 +21,28 @@ enum KytosNavigatorTab: String, KelyphosPanel {
     }
 }
 
-enum KytosInspectorTab: String, KelyphosPanel {
+enum KytosInspectorTab: String, CaseIterable, KelyphosPanel {
     case process = "Process Info"
+    case settings = "Settings"
     
     var id: String { rawValue }
     var title: String { rawValue }
-    var systemImage: String { "info.circle" }
+    var systemImage: String {
+        switch self {
+        case .process: return "info.circle"
+        case .settings: return "gear"
+        }
+    }
     
     var body: some View {
-        Text("No active process selected")
-            .foregroundColor(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        switch self {
+        case .process:
+            Text("No active process selected")
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .settings:
+            KytosSettingsView()
+        }
     }
 }
 
@@ -133,6 +144,9 @@ class MacOSLocalProcessTerminalCoordinator: NSObject, TerminalViewDelegate, Loca
     // MARK: - LocalProcessDelegate Requirements
     func processTerminated(_ source: SwiftTerm.LocalProcess, exitCode: Int32?) {
         print("[KytosDebug] Shell Terminated with code: \(String(describing: exitCode))")
+        if let id = terminalID {
+            KytosTerminalManager.shared.removeTerminal(id: id)
+        }
     }
     func dataReceived(slice: ArraySlice<UInt8>) {
         print("[KytosDebug] Received \(slice.count) bytes")
@@ -169,14 +183,26 @@ class MacOSLocalProcessTerminalCoordinator: NSObject, TerminalViewDelegate, Loca
     
     func start() {
         let bundledMksh = Bundle.main.url(forAuxiliaryExecutable: "mksh_bin")?.path ?? Bundle.main.bundlePath + "/Contents/MacOS/mksh_bin"
-        print("[KytosDebug] Starting shell: \(bundledMksh)")
-        let shell = bundledMksh // Enforce mksh explicitly, skip environment shell fallback
-        let args = ["-l"]
+        
+        let shell: String
+        let args: [String]
+        
+        switch KytosSettings.shared.shellChoice {
+        case .systemShell:
+            shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+            args = ["-l"]
+        case .embeddedMksh:
+            shell = bundledMksh
+            args = ["-l"]
+        }
+        
+        print("[KytosDebug] Starting shell: \(shell)")
+        
         var environment = ProcessInfo.processInfo.environment
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
         environment["LANG"] = environment["LANG"] ?? "en_US.UTF-8"
-        environment["SHELL"] = bundledMksh
+        environment["SHELL"] = shell
         let envArray = environment.map { "\($0.key)=\($0.value)" }
         process.startProcess(executable: shell, args: args, environment: envArray)
         print("[KytosDebug] Shell launched calling startProcess")
@@ -196,25 +222,87 @@ extension FocusedValues {
 
 struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
     let terminalID: UUID
+    let colorScheme: ColorScheme
+    let settings: KytosSettings
+    
+    private func updateTerminalAppearance(_ view: TerminalView) {
+        let colorName = colorScheme == .dark ? "Kytos-dark" : "Kytos-light"
+        if let url = Bundle.main.url(forResource: colorName, withExtension: "itermcolors") {
+            loadITermColors(from: url, into: view)
+        }
+        
+        view.font = settings.nsFont
+        
+        var effectiveStyle = settings.cursorStyle
+        view.terminal.setCursorStyle(effectiveStyle)
+        // Note: SwiftTerm's TerminalView doesn't seem to expose a direct `blink` toggle property natively outside macOS cursor abstractions. 
+        // We will pass the steady struct to the terminal.
+        
+        #if os(macOS)
+        view.needsDisplay = true
+        #else
+        view.setNeedsDisplay()
+        #endif
+    }
     
     func makeUIView(context: Context) -> TerminalView {
-        makeTerminalView(context: context)
+        let terminal = KytosTerminalManager.shared.getOrCreateTerminal(id: terminalID, colorScheme: colorScheme).view
+        updateTerminalAppearance(terminal)
+        return terminal
     }
     
-    func updateUIView(_ uiView: TerminalView, context: Context) {}
+    func updateUIView(_ uiView: TerminalView, context: Context) {
+        updateTerminalAppearance(uiView)
+    }
     
     func makeNSView(context: Context) -> TerminalView {
-        makeTerminalView(context: context)
+        let terminal = KytosTerminalManager.shared.getOrCreateTerminal(id: terminalID, colorScheme: colorScheme).view
+        updateTerminalAppearance(terminal)
+        return terminal
     }
     
-    func updateNSView(_ nsView: TerminalView, context: Context) {}
+    func updateNSView(_ nsView: TerminalView, context: Context) {
+        updateTerminalAppearance(nsView)
+    }
     
     func makeCoordinator() -> MacOSLocalProcessTerminalCoordinator {
-        MacOSLocalProcessTerminalCoordinator()
+        KytosTerminalManager.shared.getOrCreateTerminal(id: terminalID, colorScheme: colorScheme).coordinator
+    }
+}
+
+class KytosTerminalManager {
+    static let shared = KytosTerminalManager()
+    
+    struct ManagedTerminal {
+        let view: TerminalView
+        let coordinator: MacOSLocalProcessTerminalCoordinator
     }
     
-    private func makeTerminalView(context: Context) -> TerminalView {
-        context.coordinator.terminalID = terminalID
+    private var terminals: [UUID: ManagedTerminal] = [:]
+    
+    var activeTerminalID: UUID? {
+        #if os(macOS)
+        let responder = NSApplication.shared.keyWindow?.firstResponder
+        print("[KytosDebug] Evaluating activeTerminalID. FirstResponder: \(String(describing: responder))")
+        guard let firstResponder = responder as? TerminalView else { 
+            print("[KytosDebug] FirstResponder is not a TerminalView")
+            return nil 
+        }
+        let matchingKey = terminals.first(where: { $0.value.view === firstResponder })?.key
+        print("[KytosDebug] Found matching active terminal UUID: \(String(describing: matchingKey))")
+        return matchingKey
+        #else
+        return nil
+        #endif
+    }
+    
+    func getOrCreateTerminal(id: UUID, colorScheme: ColorScheme) -> ManagedTerminal {
+        if let existing = terminals[id] {
+            return existing
+        }
+        let coordinator = MacOSLocalProcessTerminalCoordinator()
+        coordinator.terminalID = id
+        
         let terminal = TerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
         #if os(macOS)
         terminal.autoresizingMask = [.width, .height]
@@ -230,7 +318,8 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
         terminal.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         #endif
         
-        if let url = Bundle.main.url(forResource: "Kytos-dark", withExtension: "itermcolors") {
+        let colorName = colorScheme == .dark ? "Kytos-dark" : "Kytos-light"
+        if let url = Bundle.main.url(forResource: colorName, withExtension: "itermcolors") {
             loadITermColors(from: url, into: terminal)
         }
         
@@ -243,15 +332,15 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
         terminal.isOpaque = false
         #endif
         
-        context.coordinator.terminalView = terminal
-        terminal.terminalDelegate = context.coordinator
-        context.coordinator.start()
+        coordinator.terminalView = terminal
+        terminal.terminalDelegate = coordinator
+        coordinator.start()
         
         // Listen for internal routing to become first responder
         NotificationCenter.default.addObserver(forName: NSNotification.Name("KytosRequestFocus"), object: nil, queue: .main) { [weak terminal] notification in
             guard let terminal = terminal,
                   let requestedID = notification.object as? UUID,
-                  requestedID == context.coordinator.terminalID else { return }
+                  requestedID == coordinator.terminalID else { return }
             terminal.window?.makeFirstResponder(terminal)
         }
         
@@ -259,7 +348,14 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             terminal.window?.makeFirstResponder(terminal)
         }
-        return terminal
+        
+        let managed = ManagedTerminal(view: terminal, coordinator: coordinator)
+        terminals[id] = managed
+        return managed
+    }
+    
+    func removeTerminal(id: UUID) {
+        terminals.removeValue(forKey: id)
     }
 }
 
@@ -267,9 +363,11 @@ struct PaneWorkspaceTerminalView: View {
     let terminalID: UUID
     @Binding var layout: PaneLayoutTree
     @FocusState private var isFocused: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var settings = KytosSettings.shared
     
     var body: some View {
-        PaneWorkspaceTerminalRepresentable(terminalID: terminalID)
+        PaneWorkspaceTerminalRepresentable(terminalID: terminalID, colorScheme: colorScheme, settings: settings)
             .background(Color.clear)
             .focusable()
             .focused($isFocused)
@@ -287,21 +385,9 @@ struct PaneWorkspaceTerminalView: View {
                 switch action {
                 case "splitHorizontal": split(axis: .horizontal)
                 case "splitVertical": split(axis: .vertical)
-                case "navLeft": navigate(direction: .left)
-                case "navRight": navigate(direction: .right)
-                case "navUp": navigate(direction: .up)
-                case "navDown": navigate(direction: .down)
                 default: break
                 }
             }
-    }
-    
-    private func navigate(direction: MoveDirection) {
-        print("[KytosDebug] Navigation requested: \(direction)")
-    }
-    
-    enum MoveDirection {
-        case left, right, up, down
     }
     
     private func split(axis: PaneLayoutTree.Axis) {
@@ -376,6 +462,44 @@ struct PaneWorkspaceView: View {
             PaneLayoutTreeView(layout: $workspaceBindable.tabs[tabIndex].sessions[sessionIndex].layout)
                 .frame(maxWidth: .infinity)
                 .containerRelativeFrame(.vertical)
+                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosWorkspaceAction"))) { notification in
+                    guard let userInfo = notification.userInfo,
+                          let action = userInfo["action"] as? String,
+                          let id = userInfo["id"] as? UUID else { return }
+                          
+                    print("[KytosDebug] PaneWorkspaceView received action: \(action) for pane: \(id)")
+                    
+                    let rootLayout = workspaceBindable.tabs[tabIndex].sessions[sessionIndex].layout
+                    print("[KytosDebug] Current Tree Layout Size: \(rootLayout)")
+                    
+                    if action.hasPrefix("nav") {
+                        var direction: PaneLayoutTree.MoveDirection?
+                        switch action {
+                        case "navLeft": direction = .left
+                        case "navRight": direction = .right
+                        case "navUp": direction = .up
+                        case "navDown": direction = .down
+                        default: break
+                        }
+                        if let dir = direction {
+                            print("[KytosDebug] Computing neighbor for direction: \(dir)")
+                            if let nextID = rootLayout.neighbor(of: id, direction: dir) {
+                                print("[KytosDebug] Neighbor found: \(nextID). Requesting focus.")
+                                NotificationCenter.default.post(name: NSNotification.Name("KytosRequestFocus"), object: nextID)
+                            } else {
+                                print("[KytosDebug] No neighbor found in direction: \(dir)")
+                            }
+                        }
+                    } else if action == "closePane" {
+                        print("[KytosDebug] Removing pane: \(id)")
+                        if let newLayout = rootLayout.removing(id: id) {
+                            print("[KytosDebug] Updating tree after removal")
+                            workspaceBindable.tabs[tabIndex].sessions[sessionIndex].layout = newLayout
+                        } else {
+                            print("[KytosDebug] Tree could not be resolved or was last pane")
+                        }
+                    }
+                }
             
         } else {
             Text("No Session Selected")
@@ -421,6 +545,7 @@ struct KytosApp: App {
                 shellState.title = "Kytos"
                 registry.register(category: "Workspace", label: "Split Horizontal", shortcut: "⌘D")
                 registry.register(category: "Workspace", label: "Split Vertical", shortcut: "⇧⌘D")
+                registry.register(category: "Workspace", label: "Close Pane", shortcut: "⌘W")
                 registry.register(category: "Workspace", label: "Navigate Left", shortcut: "⌘⌥←")
                 registry.register(category: "Workspace", label: "Navigate Right", shortcut: "⌘⌥→")
                 registry.register(category: "Workspace", label: "Navigate Up", shortcut: "⌘⌥↑")
@@ -438,17 +563,25 @@ struct KytosApp: App {
 struct KytosWorkspaceCommands: Commands {
     @FocusedValue(\.kytosFocusedTerminalID) var focusedID
     
+    private var activeID: UUID? {
+        let terminalID = KytosTerminalManager.shared.activeTerminalID ?? focusedID
+        print("[KytosDebug] KytosWorkspaceCommands evaluated activeID: \(String(describing: terminalID)) (focusedID: \(String(describing: focusedID)))")
+        return terminalID
+    }
+    
     var body: some Commands {
         CommandMenu("Workspace") {
             Button("Split Horizontal") {
-                if let id = focusedID {
+                print("[KytosDebug] Command invoked: Split Horizontal")
+                if let id = activeID {
                     NotificationCenter.default.post(name: NSNotification.Name("KytosWorkspaceAction"), object: nil, userInfo: ["action": "splitHorizontal", "id": id])
                 }
             }
             .keyboardShortcut("d", modifiers: .command)
             
             Button("Split Vertical") {
-                if let id = focusedID {
+                print("[KytosDebug] Command invoked: Split Vertical")
+                if let id = activeID {
                     NotificationCenter.default.post(name: NSNotification.Name("KytosWorkspaceAction"), object: nil, userInfo: ["action": "splitVertical", "id": id])
                 }
             }
@@ -456,29 +589,43 @@ struct KytosWorkspaceCommands: Commands {
             
             Divider()
             
+            Button("Close Pane") {
+                print("[KytosDebug] Command invoked: Close Pane")
+                if let id = activeID {
+                    NotificationCenter.default.post(name: NSNotification.Name("KytosWorkspaceAction"), object: nil, userInfo: ["action": "closePane", "id": id])
+                }
+            }
+            .keyboardShortcut("w", modifiers: [.command])
+            
+            Divider()
+            
             Button("Navigate Left") {
-                if let id = focusedID {
+                print("[KytosDebug] Command invoked: Navigate Left")
+                if let id = activeID {
                     NotificationCenter.default.post(name: NSNotification.Name("KytosWorkspaceAction"), object: nil, userInfo: ["action": "navLeft", "id": id])
                 }
             }
             .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
             
             Button("Navigate Right") {
-                if let id = focusedID {
+                print("[KytosDebug] Command invoked: Navigate Right")
+                if let id = activeID {
                     NotificationCenter.default.post(name: NSNotification.Name("KytosWorkspaceAction"), object: nil, userInfo: ["action": "navRight", "id": id])
                 }
             }
             .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
             
             Button("Navigate Up") {
-                if let id = focusedID {
+                print("[KytosDebug] Command invoked: Navigate Up")
+                if let id = activeID {
                     NotificationCenter.default.post(name: NSNotification.Name("KytosWorkspaceAction"), object: nil, userInfo: ["action": "navUp", "id": id])
                 }
             }
             .keyboardShortcut(.upArrow, modifiers: [.command, .option])
             
             Button("Navigate Down") {
-                if let id = focusedID {
+                print("[KytosDebug] Command invoked: Navigate Down")
+                if let id = activeID {
                     NotificationCenter.default.post(name: NSNotification.Name("KytosWorkspaceAction"), object: nil, userInfo: ["action": "navDown", "id": id])
                 }
             }
