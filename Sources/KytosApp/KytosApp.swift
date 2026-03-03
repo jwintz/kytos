@@ -496,7 +496,10 @@ struct PaneWorkspaceView: View {
                             print("[KytosDebug] Updating tree after removal")
                             workspaceBindable.tabs[tabIndex].sessions[sessionIndex].layout = newLayout
                         } else {
-                            print("[KytosDebug] Tree could not be resolved or was last pane")
+                            print("[KytosDebug] Tree could not be resolved or was last pane. Closing window.")
+                            #if os(macOS)
+                            NSApplication.shared.keyWindow?.performClose(nil)
+                            #endif
                         }
                     }
                 }
@@ -541,6 +544,26 @@ struct KytosApp: App {
                 )
             )
             .environment(workspace)
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KelyphosCommandInvoked"))) { notification in
+                guard let userInfo = notification.userInfo,
+                      let label = userInfo["label"] as? String else { return }
+                
+                if label == "Close Pane" {
+                    let activeID = KytosTerminalManager.shared.activeTerminalID
+                    print("[KytosDebug] Key monitor invoked: Close Pane for \(String(describing: activeID))")
+                    if let id = activeID {
+                        NotificationCenter.default.post(name: NSNotification.Name("KytosWorkspaceAction"), object: nil, userInfo: ["action": "closePane", "id": id])
+                    }
+                } else if label == "Split Horizontal" {
+                    if let id = KytosTerminalManager.shared.activeTerminalID {
+                        NotificationCenter.default.post(name: NSNotification.Name("KytosWorkspaceAction"), object: nil, userInfo: ["action": "splitHorizontal", "id": id])
+                    }
+                } else if label == "Split Vertical" {
+                    if let id = KytosTerminalManager.shared.activeTerminalID {
+                        NotificationCenter.default.post(name: NSNotification.Name("KytosWorkspaceAction"), object: nil, userInfo: ["action": "splitVertical", "id": id])
+                    }
+                }
+            }
             .onAppear {
                 shellState.title = "Kytos"
                 registry.register(category: "Workspace", label: "Split Horizontal", shortcut: "⌘D")
@@ -550,6 +573,21 @@ struct KytosApp: App {
                 registry.register(category: "Workspace", label: "Navigate Right", shortcut: "⌘⌥→")
                 registry.register(category: "Workspace", label: "Navigate Up", shortcut: "⌘⌥↑")
                 registry.register(category: "Workspace", label: "Navigate Down", shortcut: "⌘⌥↓")
+                
+                #if os(macOS)
+                NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                    let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                    // keyCode 13 is the "W" key
+                    if flags == .command && event.keyCode == 13 {
+                        if let id = KytosTerminalManager.shared.activeTerminalID {
+                            print("[KytosDebug] Global Event Monitor intercepted CMD+W for pane: \(id)")
+                            NotificationCenter.default.post(name: NSNotification.Name("KytosWorkspaceAction"), object: nil, userInfo: ["action": "closePane", "id": id])
+                            return nil // prevent the window from closing natively
+                        }
+                    }
+                    return event
+                }
+                #endif
             }
         }
         #if os(macOS)
@@ -595,7 +633,8 @@ struct KytosWorkspaceCommands: Commands {
                     NotificationCenter.default.post(name: NSNotification.Name("KytosWorkspaceAction"), object: nil, userInfo: ["action": "closePane", "id": id])
                 }
             }
-            .keyboardShortcut("w", modifiers: [.command])
+            // Temporarily removing .keyboardShortcut("w") here because macOS forces CMD+W to close the Main Window.
+            // A local key monitor will intercept it instead.
             
             Divider()
             

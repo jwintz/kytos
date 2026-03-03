@@ -95,4 +95,29 @@ public final class KytosSettings {
         return UIFont(name: fontFamily, size: fontSize) ?? UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         #endif
     }
+#if os(macOS)
+    public static let availableFonts: [String] = {
+        let manager = NSFontManager.shared
+        let allFamilies = manager.availableFontFamilies
+        var monospaced: [String] = []
+        for family in allFamilies {
+            if let font = NSFont(name: family, size: 12), font.isFixedPitch {
+                monospaced.append(family)
+            }
+        }
+        if !monospaced.contains("SF Mono") { monospaced.insert("SF Mono", at: 0) }
+        return monospaced
+    }()
+#else
+    public static let availableFonts: [String] = {
+        var monospaced: [String] = []
+        for family in UIFont.familyNames {
+            if let font = UIFont(name: family, size: 12), font.fontDescriptor.symbolicTraits.contains(.traitMonoSpace) {
+                monospaced.append(family)
+            }
+        }
+        if !monospaced.contains("Menlo") { monospaced.insert("Menlo", at: 0) }
+        return monospaced
+    }()
+#endif
 }

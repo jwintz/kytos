@@ -8,10 +8,11 @@ struct KytosSettingsView: View {
         Form {
             Section(header: Text("Display")) {
                 Picker("Font Family", selection: $settings.fontFamily) {
-                    Text("SF Mono").tag("SF Mono")
-                    Text("Menlo").tag("Menlo")
-                    Text("Monaco").tag("Monaco")
-                    Text("Courier New").tag("Courier New")
+                    ForEach(KytosSettings.availableFonts, id: \.self) { fontName in
+                        Text(fontName)
+                            .font(.custom(fontName, size: 14))
+                            .tag(fontName)
+                    }
                 }
                 
                 HStack {
@@ -71,8 +72,5 @@ struct KytosSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        #if os(macOS)
-        .frame(width: 450, height: 400)
-        #endif
     }
 }
