@@ -71,6 +71,5 @@ struct KytosSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .padding()
     }
 }

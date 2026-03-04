@@ -91,6 +91,21 @@ public final class KytosSettings {
         print("[KytosDebug][Settings] raw UserDefaults — cursorStyle=\(defaults.string(forKey: cursorStyleKey) ?? "nil"), fontFamily=\(defaults.string(forKey: fontFamilyKey) ?? "nil"), fontSize=\(defaults.double(forKey: fontSizeKey)), shellChoice=\(defaults.string(forKey: shellChoiceKey) ?? "nil")")
     }
     
+    public func resolvedCommandLine() -> [String] {
+        #if os(macOS)
+        let bundledMksh = Bundle.main.url(forAuxiliaryExecutable: "mksh_bin")?.path
+            ?? Bundle.main.bundlePath + "/Contents/MacOS/mksh_bin"
+        switch shellChoice {
+        case .embeddedMksh: return [bundledMksh]
+        case .systemShell:  return [ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"]
+        }
+        #else
+        let bundledMksh = Bundle.main.url(forAuxiliaryExecutable: "mksh_bin")?.path
+            ?? Bundle.main.bundlePath + "/mksh_bin"
+        return [bundledMksh]
+        #endif
+    }
+
     public var nsFont: KytosFont {
         #if os(macOS)
         return NSFont(name: fontFamily, size: fontSize) ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)

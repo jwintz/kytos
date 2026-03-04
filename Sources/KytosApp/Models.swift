@@ -1,9 +1,11 @@
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 import UniformTypeIdentifiers
 
 public enum PaneLayoutTree: Codable, Hashable {
-    case terminal(id: UUID, shell: String? = nil)
+    case terminal(id: UUID, commandLine: [String]? = nil, paneSessionID: String? = nil)
     indirect case split(axis: Axis, left: PaneLayoutTree, right: PaneLayoutTree)
 
     public enum Axis: String, Codable, Hashable {
@@ -21,7 +23,7 @@ public enum PaneLayoutTree: Codable, Hashable {
 
     public func path(to id: UUID) -> [PathDirection]? {
         switch self {
-        case .terminal(let tid, _):
+        case .terminal(let tid, _, _):
             if tid == id { return [] }
             return nil
         case .split(_, let left, let right):
@@ -83,7 +85,7 @@ public enum PaneLayoutTree: Codable, Hashable {
         var curr = subtree
         while true {
             switch curr {
-            case .terminal(let tid, _):
+            case .terminal(let tid, _, _):
                 return tid
             case .split(let axis, let left, let right):
                 // If moving left into an HStack, land on the right child.
@@ -104,7 +106,7 @@ public enum PaneLayoutTree: Codable, Hashable {
 
     public func removing(id: UUID) -> PaneLayoutTree? {
         switch self {
-        case .terminal(let tid, _):
+        case .terminal(let tid, _, _):
             return tid == id ? nil : self
         case .split(let axis, let left, let right):
             let newLeft = left.removing(id: id)
@@ -117,6 +119,55 @@ public enum PaneLayoutTree: Codable, Hashable {
             return .split(axis: axis, left: newLeft!, right: newRight!)
         }
     }
+
+    #if os(macOS)
+    /// Returns the terminal leaf with the given ID, or nil if not found.
+    func find(id: UUID) -> PaneLayoutTree? {
+        switch self {
+        case .terminal(let tid, _, _):
+            return tid == id ? self : nil
+        case .split(_, let left, let right):
+            return left.find(id: id) ?? right.find(id: id)
+        }
+    }
+
+    /// Returns all paneSessionIDs present in leaf nodes (non-nil only).
+    func allPaneSessionIDs() -> [String] {
+        switch self {
+        case .terminal(_, _, let sid):
+            return sid.map { [$0] } ?? []
+        case .split(_, let left, let right):
+            return left.allPaneSessionIDs() + right.allPaneSessionIDs()
+        }
+    }
+
+    /// Returns all (terminalID, paneSessionID?) leaf pairs.
+    func allTerminalLeaves() -> [(id: UUID, sessionID: String?)] {
+        switch self {
+        case .terminal(let id, _, let sid):
+            return [(id: id, sessionID: sid)]
+        case .split(_, let left, let right):
+            return left.allTerminalLeaves() + right.allTerminalLeaves()
+        }
+    }
+
+    /// Returns a copy of the tree where any terminal leaf whose paneSessionID is not
+    /// in `liveSessions` has its paneSessionID cleared (set to nil), so the view will
+    /// create a fresh session on next appear.
+    func clearingDeadSessions(_ liveSessions: Set<String>) -> PaneLayoutTree {
+        switch self {
+        case .terminal(let id, let commandLine, let sessionID):
+            let isLive = sessionID.map { liveSessions.contains($0) } ?? false
+            return .terminal(id: id, commandLine: commandLine, paneSessionID: isLive ? sessionID : nil)
+        case .split(let axis, let left, let right):
+            return .split(
+                axis: axis,
+                left: left.clearingDeadSessions(liveSessions),
+                right: right.clearingDeadSessions(liveSessions)
+            )
+        }
+    }
+    #endif
 }
 
 public struct KytosSession: Identifiable, Codable, Hashable {
@@ -182,9 +233,11 @@ public final class KytosAppModel {
     /// Used at quit time to snapshot tab group structure.
     @ObservationIgnored public var windowToID: [ObjectIdentifier: UUID] = [:]
 
+    #if os(macOS)
     public func registerWindow(_ window: NSWindow, for id: UUID) {
         windowToID[ObjectIdentifier(window)] = id
     }
+    #endif
 
     public func workspace(for windowID: UUID) -> KytosWorkspace {
         if let existing = windows[windowID] {
@@ -242,6 +295,7 @@ public final class KytosAppModel {
 
     /// Reads the live NSWindowTabGroup state and persists which UUIDs were tabbed together.
     private func saveTabGroups() {
+        #if os(macOS)
         var groups: [[UUID]] = []
         var processed = Set<ObjectIdentifier>()
         for window in NSApp.windows where !(window is NSPanel) && window.contentView != nil {
@@ -259,6 +313,7 @@ public final class KytosAppModel {
             UserDefaults.standard.set(data, forKey: "KytosAppModel_TabGroups_v1")
             print("[KytosDebug][AppModel] saveTabGroups() — \(groups.count) group(s)")
         }
+        #endif
     }
 
     /// Returns saved tab groups from the previous session, or an empty array.
@@ -284,5 +339,29 @@ public final class KytosAppModel {
         } catch {
             print("[KytosDebug][AppModel] load() DECODE FAILED: \(error)")
         }
+        #if os(macOS)
+        reconcileSessionsOnLaunch()
+        #endif
     }
+
+    #if os(macOS)
+    /// Cross-references persisted paneSessionIDs with the live pane server.
+    /// Sessions that no longer exist (server restarted or timed out) have their IDs cleared
+    /// so they'll be recreated fresh when the terminal view appears.
+    private func reconcileSessionsOnLaunch() {
+        let liveSessions: Set<String>
+        do {
+            let list = try KytosPaneClient.shared.listSessions()
+            liveSessions = Set(list.filter { $0.isRunning }.map { $0.id })
+            print("[KytosDebug][AppModel] reconcile — \(liveSessions.count) live pane session(s)")
+        } catch {
+            // Server not running — all session IDs are stale
+            liveSessions = []
+            print("[KytosDebug][AppModel] reconcile — pane server unreachable, clearing all sessionIDs: \(error)")
+        }
+        for workspace in windows.values {
+            workspace.session.layout = workspace.session.layout.clearingDeadSessions(liveSessions)
+        }
+    }
+    #endif
 }
