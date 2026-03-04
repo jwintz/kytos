@@ -1,6 +1,6 @@
 name: Kytos
 options:
-  bundleIdPrefix: com.kytos
+  bundleIdPrefix: me.jwintz
   deploymentTarget:
     macOS: 26.0
     iOS: 26.0

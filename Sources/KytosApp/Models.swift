@@ -1,26 +1,27 @@
 import SwiftUI
+import AppKit
 import UniformTypeIdentifiers
 
 public enum PaneLayoutTree: Codable, Hashable {
-    case terminal(id: UUID)
+    case terminal(id: UUID, shell: String? = nil)
     indirect case split(axis: Axis, left: PaneLayoutTree, right: PaneLayoutTree)
-    
+
     public enum Axis: String, Codable, Hashable {
         case horizontal
         case vertical
     }
-    
+
     public enum MoveDirection {
         case left, right, up, down
     }
-    
+
     public enum PathDirection {
         case left, right
     }
-    
+
     public func path(to id: UUID) -> [PathDirection]? {
         switch self {
-        case .terminal(let tid):
+        case .terminal(let tid, _):
             if tid == id { return [] }
             return nil
         case .split(_, let left, let right):
@@ -33,23 +34,23 @@ public enum PaneLayoutTree: Codable, Hashable {
             return nil
         }
     }
-    
+
     public func neighbor(of id: UUID, direction: MoveDirection) -> UUID? {
         guard let p = self.path(to: id) else { return nil }
-        
+
         var targetSubtree: PaneLayoutTree? = nil
         var remainingPath = p
         var ancestorNodes = [PaneLayoutTree]()
         var node = self
         ancestorNodes.append(node)
-        
+
         for step in remainingPath {
             if case .split(_, let left, let right) = node {
                 node = (step == .left) ? left : right
                 ancestorNodes.append(node)
             }
         }
-        
+
         var i = p.count - 1
         while i >= 0 {
             let parent = ancestorNodes[i]
@@ -76,20 +77,20 @@ public enum PaneLayoutTree: Codable, Hashable {
             }
             i -= 1
         }
-        
+
         guard let subtree = targetSubtree else { return nil }
-        
+
         var curr = subtree
         while true {
             switch curr {
-            case .terminal(let tid):
+            case .terminal(let tid, _):
                 return tid
             case .split(let axis, let left, let right):
                 // If moving left into an HStack, land on the right child.
                 if direction == .left && axis == .horizontal {
                     curr = right
                 } else if direction == .right && axis == .horizontal {
-                    curr = left 
+                    curr = left
                 } else if direction == .up && axis == .vertical {
                     curr = right
                 } else if direction == .down && axis == .vertical {
@@ -100,19 +101,19 @@ public enum PaneLayoutTree: Codable, Hashable {
             }
         }
     }
-    
+
     public func removing(id: UUID) -> PaneLayoutTree? {
         switch self {
-        case .terminal(let tid):
+        case .terminal(let tid, _):
             return tid == id ? nil : self
         case .split(let axis, let left, let right):
             let newLeft = left.removing(id: id)
             let newRight = right.removing(id: id)
-            
+
             if newLeft == nil && newRight == nil { return nil }
             if newLeft == nil { return newRight }
             if newRight == nil { return newLeft }
-            
+
             return .split(axis: axis, left: newLeft!, right: newRight!)
         }
     }
@@ -122,7 +123,7 @@ public struct KytosSession: Identifiable, Codable, Hashable {
     public var id: UUID
     public var name: String
     public var layout: PaneLayoutTree
-    
+
     public init(id: UUID = UUID(), name: String = "Session", layout: PaneLayoutTree) {
         self.id = id
         self.name = name
@@ -130,61 +131,158 @@ public struct KytosSession: Identifiable, Codable, Hashable {
     }
 }
 
-public struct KytosTab: Identifiable, Codable, Hashable {
-    public var id: UUID
-    public var name: String
-    public var sessions: [KytosSession]
-    public var selectedSessionID: UUID?
-    
-    public init(id: UUID = UUID(), name: String = "Tab", sessions: [KytosSession] = [], selectedSessionID: UUID? = nil) {
-        self.id = id
-        self.name = name
-        self.sessions = sessions
-        self.selectedSessionID = selectedSessionID
+/// One macOS window/tab. Each workspace holds a single session with its split pane layout.
+@Observable
+public final class KytosWorkspace: Codable {
+    public var session: KytosSession
+
+    public init(session: KytosSession) {
+        self.session = session
+    }
+
+    public static func defaultWorkspace() -> KytosWorkspace {
+        let initialTerminal = PaneLayoutTree.terminal(id: UUID())
+        let defaultSession = KytosSession(name: "Terminal", layout: initialTerminal)
+        return KytosWorkspace(session: defaultSession)
+    }
+
+    // MARK: - Codable
+    enum CodingKeys: String, CodingKey {
+        case session
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.session = try container.decode(KytosSession.self, forKey: .session)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(session, forKey: .session)
     }
 }
 
 @Observable
-public final class KytosWorkspace {
-    public var tabs: [KytosTab]
-    public var selectedTabID: UUID?
-    
-    public init(tabs: [KytosTab] = [], selectedTabID: UUID? = nil) {
-        self.tabs = tabs
-        self.selectedTabID = selectedTabID
+public final class KytosAppModel {
+    public static let shared = KytosAppModel()
+
+    public var windows: [UUID: KytosWorkspace] = [:]
+
+    private init() {
+        load()
     }
-    
-    // Persistence engine
+
+    /// Set of windowIDs that have been claimed by live windows in this session.
+    @ObservationIgnored private var claimedWindowIDs: Set<UUID> = []
+    @ObservationIgnored public var hasRestoredWindows = false
+
+    // MARK: - Window → UUID mapping (populated at runtime by WindowRegistrar)
+
+    /// Maps each live NSWindow's identity to its workspace UUID.
+    /// Used at quit time to snapshot tab group structure.
+    @ObservationIgnored public var windowToID: [ObjectIdentifier: UUID] = [:]
+
+    public func registerWindow(_ window: NSWindow, for id: UUID) {
+        windowToID[ObjectIdentifier(window)] = id
+    }
+
+    public func workspace(for windowID: UUID) -> KytosWorkspace {
+        if let existing = windows[windowID] {
+            claimedWindowIDs.insert(windowID)
+            return existing
+        }
+        print("[KytosDebug][AppModel] workspace(for: \(windowID.uuidString.prefix(8))) — no exact match, existing=\(windows.count), claimed=\(claimedWindowIDs.count)")
+        // Find the first unclaimed workspace from a previous session to remap
+        let unclaimed = windows.filter { !claimedWindowIDs.contains($0.key) }
+        if let (oldKey, existing) = unclaimed.first {
+            print("[KytosDebug][AppModel]   → remapping \(oldKey.uuidString.prefix(8)) → \(windowID.uuidString.prefix(8)), session=\(existing.session.name)")
+            // Batch remove+insert to trigger didSet only once
+            var updated = windows
+            updated.removeValue(forKey: oldKey)
+            updated[windowID] = existing
+            windows = updated
+            claimedWindowIDs.insert(windowID)
+            return existing
+        }
+        print("[KytosDebug][AppModel]   → creating default workspace")
+        let newWorkspace = KytosWorkspace.defaultWorkspace()
+        windows[windowID] = newWorkspace
+        claimedWindowIDs.insert(windowID)
+        return newWorkspace
+    }
+
+    public func isWindowClaimed(_ windowID: UUID) -> Bool {
+        claimedWindowIDs.contains(windowID)
+    }
+
+    /// Removes orphaned workspaces that no live window has claimed.
+    /// Call after all windows have appeared.
+    public func pruneOrphanedWorkspaces() {
+        let orphanedKeys = windows.keys.filter { !claimedWindowIDs.contains($0) }
+        guard !orphanedKeys.isEmpty else { return }
+        print("[KytosDebug][AppModel] Pruning \(orphanedKeys.count) orphaned workspace(s), keeping \(claimedWindowIDs.count)")
+        // Batch: build new dict to trigger didSet only once
+        var pruned = windows
+        for key in orphanedKeys {
+            pruned.removeValue(forKey: key)
+        }
+        windows = pruned
+    }
+
     public func save() {
-         guard let data = try? JSONEncoder().encode(tabs) else { return }
-         UserDefaults.standard.set(data, forKey: "KytosWorkspace_Tabs")
-         
-         if let id = selectedTabID?.uuidString {
-             UserDefaults.standard.set(id, forKey: "KytosWorkspace_SelectedTab")
-         }
+        do {
+            let data = try JSONEncoder().encode(windows)
+            UserDefaults.standard.set(data, forKey: "KytosAppModel_Windows_v5")
+            print("[KytosDebug][AppModel] save() — \(windows.count) window(s), \(data.count) bytes")
+        } catch {
+            print("[KytosDebug][AppModel] save() FAILED: \(error)")
+        }
+        saveTabGroups()
     }
-    
-    public static func load() -> KytosWorkspace {
-        let decoder = JSONDecoder()
-        
-        let savedTabs: [KytosTab]
-        if let data = UserDefaults.standard.data(forKey: "KytosWorkspace_Tabs"),
-           let decoded = try? decoder.decode([KytosTab].self, from: data) {
-            savedTabs = decoded
-        } else {
-            // Ex Nihilo initial state
-            let initialTerminal = PaneLayoutTree.terminal(id: UUID())
-            let defaultSession = KytosSession(name: "Default", layout: initialTerminal)
-            savedTabs = [KytosTab(name: "Terminal", sessions: [defaultSession], selectedSessionID: defaultSession.id)]
+
+    /// Reads the live NSWindowTabGroup state and persists which UUIDs were tabbed together.
+    private func saveTabGroups() {
+        var groups: [[UUID]] = []
+        var processed = Set<ObjectIdentifier>()
+        for window in NSApp.windows where !(window is NSPanel) && window.contentView != nil {
+            let key = ObjectIdentifier(window)
+            guard !processed.contains(key) else { continue }
+            if let tabGroup = window.tabGroup, tabGroup.windows.count > 1 {
+                let groupUUIDs = tabGroup.windows.compactMap { windowToID[ObjectIdentifier($0)] }
+                tabGroup.windows.forEach { processed.insert(ObjectIdentifier($0)) }
+                if groupUUIDs.count > 1 { groups.append(groupUUIDs) }
+            } else {
+                processed.insert(key)
+            }
         }
-        
-        var selectedID: UUID? = nil
-        if let idString = UserDefaults.standard.string(forKey: "KytosWorkspace_SelectedTab") {
-            selectedID = UUID(uuidString: idString)
-        } else {
-            selectedID = savedTabs.first?.id
+        if let data = try? JSONEncoder().encode(groups) {
+            UserDefaults.standard.set(data, forKey: "KytosAppModel_TabGroups_v1")
+            print("[KytosDebug][AppModel] saveTabGroups() — \(groups.count) group(s)")
         }
-        
-        return KytosWorkspace(tabs: savedTabs, selectedTabID: selectedID)
+    }
+
+    /// Returns saved tab groups from the previous session, or an empty array.
+    public func loadTabGroups() -> [[UUID]] {
+        guard let data = UserDefaults.standard.data(forKey: "KytosAppModel_TabGroups_v1"),
+              let groups = try? JSONDecoder().decode([[UUID]].self, from: data) else { return [] }
+        return groups
+    }
+
+    private func load() {
+        print("[KytosDebug][AppModel] load()")
+        guard let data = UserDefaults.standard.data(forKey: "KytosAppModel_Windows_v5") else {
+            print("[KytosDebug][AppModel] load() — no saved data")
+            return
+        }
+        do {
+            let decoded = try JSONDecoder().decode([UUID: KytosWorkspace].self, from: data)
+            print("[KytosDebug][AppModel] load() — \(data.count) bytes → \(decoded.count) workspace(s)")
+            for (key, ws) in decoded {
+                print("[KytosDebug][AppModel]   window \(key.uuidString.prefix(8)): session=\(ws.session.name)")
+            }
+            self.windows = decoded
+        } catch {
+            print("[KytosDebug][AppModel] load() DECODE FAILED: \(error)")
+        }
     }
 }

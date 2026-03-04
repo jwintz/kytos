@@ -60,7 +60,7 @@ public final class KytosSettings {
     
     private init() {
         let defaults = UserDefaults.standard
-        
+
         // Defaults
         defaults.register(defaults: [
             cursorStyleKey: "steadyBlock",
@@ -69,7 +69,7 @@ public final class KytosSettings {
             fontSizeKey: 12.0,
             shellChoiceKey: ShellChoice.embeddedMksh.rawValue
         ])
-        
+
         let styleRaw = defaults.string(forKey: cursorStyleKey) ?? "steadyBlock"
         switch styleRaw {
         case "steadyBlock": self.cursorStyle = .steadyBlock
@@ -80,12 +80,15 @@ public final class KytosSettings {
         self.cursorBlink = defaults.bool(forKey: cursorBlinkKey)
         self.fontFamily = defaults.string(forKey: fontFamilyKey) ?? "SF Mono"
         self.fontSize = CGFloat(defaults.double(forKey: fontSizeKey))
-        
+
         if let shellRaw = defaults.string(forKey: shellChoiceKey), let choice = ShellChoice(rawValue: shellRaw) {
             self.shellChoice = choice
         } else {
             self.shellChoice = .embeddedMksh
         }
+
+        print("[KytosDebug][Settings] init — cursorStyle=\(styleRaw), cursorBlink=\(cursorBlink), fontFamily=\(fontFamily), fontSize=\(fontSize), shellChoice=\(shellChoice.rawValue)")
+        print("[KytosDebug][Settings] raw UserDefaults — cursorStyle=\(defaults.string(forKey: cursorStyleKey) ?? "nil"), fontFamily=\(defaults.string(forKey: fontFamilyKey) ?? "nil"), fontSize=\(defaults.double(forKey: fontSizeKey)), shellChoice=\(defaults.string(forKey: shellChoiceKey) ?? "nil")")
     }
     
     public var nsFont: KytosFont {
