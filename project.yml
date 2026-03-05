@@ -44,7 +44,14 @@ targets:
           codesign --force --sign - ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin
       - name: Bundle pane
         script: |
-          PANE_BIN=$(find "${BUILD_DIR}" -name "pane" -type f -perm +0111 2>/dev/null | grep -v "\.dSYM\|[Dd]ebug-iphonesimulator" | sort | tail -1)
+          set -e
+          export PATH="/usr/bin:/bin:/usr/local/bin:$PATH"
+          cd "${SRCROOT}/Submodules/Pane"
+          swift build -c debug 2>&1 | tail -3
+          PANE_BIN="${SRCROOT}/Submodules/Pane/.build/debug/pane"
+          if [ ! -f "$PANE_BIN" ]; then
+            PANE_BIN=$(find "${BUILD_DIR}" -name "pane" -type f -perm +0111 2>/dev/null | grep -v "\.dSYM\|[Dd]ebug-iphonesimulator" | sort | tail -1)
+          fi
           if [ -n "$PANE_BIN" ]; then
             mkdir -p "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}"
             cp "$PANE_BIN" "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/pane"
@@ -56,6 +63,11 @@ targets:
       properties:
         LSApplicationCategoryType: public.app-category.utilities
         NSPrincipalClass: NSApplication
+        CFBundleName: Kytos
+        CFBundleDisplayName: Kytos
+    settings:
+      PRODUCT_NAME: Kytos
+      PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos
     entitlements:
       path: Sources/KytosApp/Kytos.entitlements
 
@@ -85,3 +97,8 @@ targets:
       properties:
         UIApplicationSupportsMultipleScenes: true
         UILaunchScreen: {}
+        CFBundleName: Kytos
+        CFBundleDisplayName: Kytos
+    settings:
+      PRODUCT_NAME: Kytos
+      PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos

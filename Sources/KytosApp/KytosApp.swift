@@ -294,6 +294,7 @@ private struct OrphanedSessionRow: View {
 
 #if os(macOS)
 import AppKit
+import Darwin
 typealias PlatformViewRepresentable = NSViewRepresentable
 #else
 import UIKit
@@ -438,7 +439,8 @@ class MacOSLocalProcessTerminalCoordinator: NSObject, TerminalViewDelegate, Loca
         environment["LANG"] = environment["LANG"] ?? "en_US.UTF-8"
         environment["SHELL"] = shell
         let envArray = environment.map { "\($0.key)=\($0.value)" }
-        process.startProcess(executable: shell, args: args, environment: envArray)
+        let home = environment["HOME"] ?? NSHomeDirectory()
+        process.startProcess(executable: shell, args: args, environment: envArray, currentDirectory: home)
         kLog("[KytosDebug] Shell launched calling startProcess")
     }
 }
@@ -763,6 +765,60 @@ class KytosTerminalManager {
     func registerSessionID(_ sessionID: String, for terminalID: UUID) {
         terminalSessionIDs[terminalID] = sessionID
     }
+
+    // MARK: - Active pane subtitle (process name — cwd)
+    #if os(macOS)
+    private var cachedSessionPIDs: [String: pid_t] = [:]
+
+    /// Returns the window subtitle for the currently active pane: "process — ~/path".
+    /// Safe to call from the main thread; PID lookup is synchronous but fast once cached.
+    func activePaneSubtitle() -> String {
+        guard let tid = lastKnownActiveTerminalID,
+              let sid = terminalSessionIDs[tid] else { return "" }
+
+        let shellPid: pid_t
+        if let cached = cachedSessionPIDs[sid] {
+            shellPid = cached
+        } else {
+            guard let info = (try? KytosPaneClient.shared.listSessions())?
+                    .first(where: { $0.id == sid }),
+                  let pid = info.processID else { return "" }
+            cachedSessionPIDs[sid] = pid_t(pid)
+            shellPid = pid_t(pid)
+        }
+
+        let cwd = kytosProcessCWD(shellPid) ?? ""
+        let name = kytosProcessForegroundName(shellPid)
+        let display = cwd.hasPrefix(NSHomeDirectory())
+            ? "~" + cwd.dropFirst(NSHomeDirectory().count)
+            : cwd
+        return display.isEmpty ? name : "\(name) — \(display)"
+    }
+
+    private func kytosProcessCWD(_ pid: pid_t) -> String? {
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return nil }
+        return withUnsafeBytes(of: &info.pvi_cdir.vip_path) { ptr in
+            String(cString: ptr.bindMemory(to: CChar.self).baseAddress!)
+        }
+    }
+
+    private func kytosProcessForegroundName(_ shellPid: pid_t) -> String {
+        // Check for a foreground child process
+        var childPids = [pid_t](repeating: 0, count: 32)
+        let n = proc_listchildpids(shellPid, &childPids, Int32(MemoryLayout<pid_t>.size * 32))
+        if n > 0 {
+            var buf = [CChar](repeating: 0, count: 1024)
+            proc_name(childPids[0], &buf, UInt32(buf.count))
+            let childName = String(cString: &buf)
+            if !childName.isEmpty { return childName }
+        }
+        var buf = [CChar](repeating: 0, count: 1024)
+        proc_name(shellPid, &buf, UInt32(buf.count))
+        return String(cString: &buf)
+    }
+    #endif
 }
 
 struct PaneWorkspaceTerminalView: View {
@@ -1182,7 +1238,7 @@ struct KytosApp: App {
     private var mainWindowGroup: some Scene {
         #if os(macOS)
         WindowGroup("Kytos", id: "main", for: UUID.self) { $windowID in
-            KytosWindowView(windowID: $windowID, appModel: appModel)
+            KytosWindowView(windowID: $windowID, appModel: appModel, shellState: settingsShellState)
         }
         #else
         WindowGroup("Kytos") {
@@ -1216,17 +1272,22 @@ struct KytosWindowView: View {
     @State private var workspace: KytosWorkspace?
     @Environment(\.openWindow) private var openWindow
     @Environment(\.kelyphosKeybindingRegistry) private var registry
-    @State private var shellState: KelyphosShellState
 
+    // Shared appearance state — same instance as the Settings window so changes are instant
+    var shellState: KelyphosShellState
     var appModel: KytosAppModel
 
-    init(windowID: Binding<UUID?>, appModel: KytosAppModel) {
+    // Per-window panel visibility via AppStorage, keyed by a short stable window index
+    @AppStorage("me.jwintz.kytos.panel.navigatorVisible") private var navigatorVisible = false
+    @AppStorage("me.jwintz.kytos.panel.inspectorVisible") private var inspectorVisible = false
+    @AppStorage("me.jwintz.kytos.panel.utilityVisible") private var utilityVisible = false
+
+    init(windowID: Binding<UUID?>, appModel: KytosAppModel, shellState: KelyphosShellState) {
         self._windowID = windowID
         let resolvedID = windowID.wrappedValue ?? UUID()
         self._stableID = State(initialValue: resolvedID)
         self.appModel = appModel
-        let state = KelyphosShellState(persistencePrefix: "me.jwintz.kytos")
-        self._shellState = State(initialValue: state)
+        self.shellState = shellState
         kLog("[KytosDebug][WindowView] init — windowID=\(windowID.wrappedValue?.uuidString.prefix(8) ?? "nil"), stableID=\(resolvedID.uuidString.prefix(8))")
     }
 
@@ -1241,6 +1302,10 @@ struct KytosWindowView: View {
             // Workspace removal is handled by the NSWindow.willCloseNotification observer below.
         }
         .onAppear {
+            // Restore persisted panel visibility into shellState
+            shellState.navigatorVisible = navigatorVisible
+            shellState.inspectorVisible = inspectorVisible
+            shellState.utilityAreaVisible = utilityVisible
             // Create workspace only here — onAppear fires for real windows, not speculative views
             if workspace == nil {
                 workspace = appModel.workspace(for: stableID)
@@ -1325,16 +1390,21 @@ struct KytosWindowView: View {
         .environment(workspace)
         .focusedSceneValue(\.kytosFocusedWindowID, stableID)
         .background { WindowRegistrar(windowID: stableID) }
-        .onChange(of: shellState.navigatorVisible) { _, _ in
-            refocusActiveTerminal()
-            shellState.savePanelState()
+        #if os(macOS)
+        .onReceive(Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()) { _ in
+            shellState.subtitle = KytosTerminalManager.shared.activePaneSubtitle()
         }
-        .onChange(of: shellState.inspectorVisible) { _, _ in
+        #endif
+        .onChange(of: shellState.navigatorVisible) { _, newVal in
             refocusActiveTerminal()
-            shellState.savePanelState()
+            navigatorVisible = newVal
         }
-        .onChange(of: shellState.utilityAreaVisible) { _, _ in
-            shellState.savePanelState()
+        .onChange(of: shellState.inspectorVisible) { _, newVal in
+            refocusActiveTerminal()
+            inspectorVisible = newVal
+        }
+        .onChange(of: shellState.utilityAreaVisible) { _, newVal in
+            utilityVisible = newVal
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KelyphosCommandInvoked"))) { notification in
             guard let userInfo = notification.userInfo,

@@ -12,6 +12,18 @@ After adding or removing source files, regenerate the project with:
 swift run --package-path .build/checkouts/XcodeGen xcodegen generate --spec project.yml
 ```
 
+Then build:
+
+```bash
+xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build
+```
+
+Then run:
+
+```bash
+$(xcodebuild -project /Users/jwintz/Syntropment/kytos/Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | awk '/BUILT_PRODUCTS_DIR/{print $3}' | head -1)/Kytos.app/Contents/MacOS/Kytos
+```
+
 ## Architecture
 
 | Component | Role |

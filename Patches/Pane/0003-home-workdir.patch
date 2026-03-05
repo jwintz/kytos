@@ -1,0 +1,12 @@
+diff --git a/Sources/pane/PaneTerminalSession.swift b/Sources/pane/PaneTerminalSession.swift
+--- a/Sources/pane/PaneTerminalSession.swift
++++ b/Sources/pane/PaneTerminalSession.swift
+@@ -51,7 +51,8 @@ final class PaneTerminalSession: Terminal, LocalProcessDelegate {
+         environment["LANG"] = environment["LANG"] ?? "en_US.UTF-8"
+ 
+         let envArray = environment.map { "\($0.key)=\($0.value)" }
++        let home = environment["HOME"] ?? NSHomeDirectory()
+         logger.info("starting process", metadata: ["executable": "\(shell)", "args": "\(args)"])
+-        process.startProcess(executable: shell, args: args, environment: envArray)
++        process.startProcess(executable: shell, args: args, environment: envArray, currentDirectory: home)
+     }
