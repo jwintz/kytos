@@ -35,13 +35,15 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
         readQueue.async { [weak self] in
             guard let self else { return }
 
+            var effectiveID = sessionID
+
             // Retry with backoff — the pane server may still be starting
             // (reconciliation runs asynchronously off the main thread).
             var conn: KytosPaneConnection?
             for attempt in 0..<10 {
                 do {
                     conn = try KytosPaneClient.shared.openAttachConnection(
-                        sessionID: sessionID, cols: cols, rows: rows)
+                        sessionID: effectiveID, cols: cols, rows: rows)
                     kLog("[KytosDebug][PaneStream] attach connected on attempt \(attempt)")
                     break
                 } catch {
@@ -49,7 +51,7 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
                         let delay = UInt32(100_000 * min(attempt + 1, 5)) // 100ms–500ms
                         usleep(delay)
                     } else {
-                        kLog("[KytosDebug][PaneStream] Failed to attach to \(sessionID) after 10 attempts: \(error)")
+                        kLog("[KytosDebug][PaneStream] Failed to attach to \(effectiveID) after 10 attempts: \(error)")
                         return
                     }
                 }
@@ -75,6 +77,26 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
                         response = resp
                         kLog("[KytosDebug][PaneStream] got response ok=\(resp.ok) msg=\(resp.message ?? "")")
                         if !resp.ok {
+                            // Session not found — create a new one and retry
+                            conn.close()
+                            kLog("[KytosDebug][PaneStream] session \(effectiveID) not found, creating new")
+                            if let newInfo = try? KytosPaneClient.shared.createSession(
+                                commandLine: KytosSettings.shared.resolvedCommandLine()) {
+                                effectiveID = newInfo.id
+                                kLog("[KytosDebug][PaneStream] created replacement session \(effectiveID), retrying attach")
+                                // Update layout on main thread
+                                DispatchQueue.main.async {
+                                    NotificationCenter.default.post(
+                                        name: NSNotification.Name("KytosPaneSessionReplaced"),
+                                        object: nil,
+                                        userInfo: ["oldID": sessionID, "newID": effectiveID])
+                                }
+                                // Retry attach with new session
+                                if let newConn = try? KytosPaneClient.shared.openAttachConnection(
+                                    sessionID: effectiveID, cols: cols, rows: rows) {
+                                    self.handleAttachResponse(conn: newConn, tv: tv, sessionID: effectiveID, cols: cols, rows: rows)
+                                }
+                            }
                             return
                         }
                     case .snapshot(let snap):
@@ -91,34 +113,62 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
                 }
 
                 guard let snap = snapshot else {
-                    kLog("[KytosDebug][PaneStream] No snapshot received for session \(sessionID) (response=\(response != nil))")
+                    kLog("[KytosDebug][PaneStream] No snapshot received for session \(effectiveID) (response=\(response != nil))")
                     return
                 }
-                self.connection = conn
-
-                let bytes = snap.toANSIBytes()
-                kLog("[KytosDebug][PaneStream] Feeding snapshot \(snap.cols)x\(snap.rows) (\(bytes.count) bytes, \(snap.lines.count) lines) to terminal")
-                DispatchQueue.main.async {
-                    tv.feed(byteArray: bytes[...])
-                    for delta in earlyDeltas {
-                        tv.feed(byteArray: delta[...])
-                    }
-                }
-
-                // Force a SIGWINCH so the shell redraws. The snapshot's toANSIBytes()
-                // can produce output that SwiftTerm doesn't visually render correctly;
-                // a shell-driven redraw via SIGWINCH always works because it's raw PTY
-                // output. Toggle the size to guarantee the signal even when cols/rows
-                // haven't changed since the last attach.
-                try? conn.sendBinaryResize(cols: max(cols - 1, 1), rows: rows)
-                usleep(50_000) // 50ms for the shell to notice
-                try? conn.sendBinaryResize(cols: cols, rows: rows)
-
-                self.readLoop(conn: conn, tv: tv)
+                self.finishAttach(conn: conn, tv: tv, snapshot: snap, earlyDeltas: earlyDeltas, cols: cols, rows: rows)
             } catch {
-                kLog("[KytosDebug][PaneStream] Stream setup error for \(sessionID): \(error)")
+                kLog("[KytosDebug][PaneStream] Stream setup error for \(effectiveID): \(error)")
             }
         }
+    }
+
+    // MARK: - Attach Helpers
+
+    private func handleAttachResponse(conn: KytosPaneConnection, tv: TerminalView, sessionID: String, cols: Int, rows: Int) {
+        do {
+            var response: KytosPaneResponse?
+            var snapshot: KytosPaneTerminalSnapshot?
+            var earlyDeltas: [[UInt8]] = []
+
+            for i in 0..<50 {
+                guard let msg = try conn.readFullMessage() else { break }
+                switch msg {
+                case .response(let resp):
+                    response = resp
+                    kLog("[KytosDebug][PaneStream] got response ok=\(resp.ok) msg=\(resp.message ?? "")")
+                    if !resp.ok { return }
+                case .snapshot(let snap):
+                    snapshot = snap
+                    kLog("[KytosDebug][PaneStream] got snapshot \(snap.cols)x\(snap.rows), \(snap.lines.count) lines")
+                case .delta(let delta):
+                    earlyDeltas.append(delta.toANSIBytes())
+                case .other: break
+                }
+                if response != nil && snapshot != nil { break }
+            }
+            guard let snap = snapshot else { return }
+            finishAttach(conn: conn, tv: tv, snapshot: snap, earlyDeltas: earlyDeltas, cols: cols, rows: rows)
+        } catch {
+            kLog("[KytosDebug][PaneStream] handleAttachResponse error: \(error)")
+        }
+    }
+
+    private func finishAttach(conn: KytosPaneConnection, tv: TerminalView, snapshot: KytosPaneTerminalSnapshot, earlyDeltas: [[UInt8]], cols: Int, rows: Int) {
+        self.connection = conn
+        let bytes = snapshot.toANSIBytes()
+        kLog("[KytosDebug][PaneStream] Feeding snapshot \(snapshot.cols)x\(snapshot.rows) (\(bytes.count) bytes, \(snapshot.lines.count) lines) to terminal")
+        DispatchQueue.main.async {
+            tv.feed(byteArray: bytes[...])
+            for delta in earlyDeltas {
+                tv.feed(byteArray: delta[...])
+            }
+        }
+        // Force SIGWINCH for shell redraw
+        try? conn.sendBinaryResize(cols: max(cols - 1, 1), rows: rows)
+        usleep(50_000)
+        try? conn.sendBinaryResize(cols: cols, rows: rows)
+        self.readLoop(conn: conn, tv: tv)
     }
 
     // MARK: - Read Loop

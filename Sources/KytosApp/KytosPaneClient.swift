@@ -216,7 +216,8 @@ enum KytosPaneError: Error {
 // MARK: - Framed Connection
 
 final class KytosPaneConnection {
-    private let fd: Int32
+    private var fd: Int32
+    private var closed = false
 
     private static let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -231,7 +232,7 @@ final class KytosPaneConnection {
     }()
 
     init(fd: Int32) { self.fd = fd }
-    deinit { Darwin.close(fd) }
+    deinit { if !closed { Darwin.close(fd) } }
 
     /// Send a JSON control message.
     func send(_ message: KytosPaneWireMessage) throws {
@@ -287,7 +288,7 @@ final class KytosPaneConnection {
         }
     }
 
-    func close() { Darwin.close(fd) }
+    func close() { if !closed { Darwin.close(fd); closed = true } }
 
     // MARK: - Private I/O
 
@@ -441,7 +442,9 @@ final class KytosPaneClient {
     // MARK: - Private
 
     private func sendControl(_ req: KytosPaneRequest, allowStart: Bool) throws -> KytosPaneResponse {
+        kLog("[KytosDebug][PaneClient] sendControl \(req.command) allowStart=\(allowStart)")
         let conn = try openConnection(allowStart: allowStart)
+        defer { conn.close() }
         try conn.send(.request(req))
         guard let response = try conn.readResponse() else {
             throw KytosPaneError.invalidResponse
@@ -451,7 +454,9 @@ final class KytosPaneClient {
 
     private func openConnection(allowStart: Bool) throws -> KytosPaneConnection {
         do {
-            return KytosPaneConnection(fd: try connectOnce())
+            let fd = try connectOnce()
+            kLog("[KytosDebug][PaneClient] openConnection — connected fd=\(fd)")
+            return KytosPaneConnection(fd: fd)
         } catch {
             guard allowStart else { throw error }
             // Serialize server startup: only one caller launches the process; others wait and retry.

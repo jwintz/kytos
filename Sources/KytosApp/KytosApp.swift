@@ -720,6 +720,18 @@ struct PaneWorkspaceTerminalView: View {
             }
         }
         .task { await initPaneSession() }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosPaneSessionReplaced"))) { notification in
+            guard let userInfo = notification.userInfo,
+                  let oldID = userInfo["oldID"] as? String,
+                  let newID = userInfo["newID"] as? String,
+                  resolvedSessionID == oldID else { return }
+            resolvedSessionID = newID
+            if case .terminal(let id, let cmd, _) = layout {
+                layout = .terminal(id: id, commandLine: cmd, paneSessionID: newID)
+                KytosAppModel.shared.save()
+            }
+            kLog("[KytosDebug][initPaneSession] session replaced: \(oldID) → \(newID)")
+        }
         #else
         PaneWorkspaceTerminalRepresentable(
             terminalID: terminalID,
@@ -784,18 +796,24 @@ struct PaneWorkspaceTerminalView: View {
         // Create a new pane session on a background thread (blocking socket call).
         let cmdLine = commandLine ?? KytosSettings.shared.resolvedCommandLine()
         kLog("[KytosDebug][initPaneSession] creating session with cmdLine: \(cmdLine.joined(separator: " "))")
-        let newSessionID: String? = await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let sid = try? KytosPaneClient.shared.createSession(commandLine: cmdLine).id
-                cont.resume(returning: sid)
+        let newSessionID: String? = await Task.detached(priority: .userInitiated) {
+            kLog("[KytosDebug][initPaneSession] createSession on detached task")
+            do {
+                let info = try KytosPaneClient.shared.createSession(commandLine: cmdLine)
+                kLog("[KytosDebug][initPaneSession] createSession returned: \(info.id)")
+                return info.id
+            } catch {
+                kLog("[KytosDebug][initPaneSession] createSession FAILED: \(error)")
+                return nil as String?
             }
-        }
+        }.value
         if let sid = newSessionID {
             resolvedSessionID = sid
             kLog("[KytosDebug][initPaneSession] created session: \(sid)")
             // Persist the session ID back into the layout tree.
             if case .terminal(let id, let cmd, nil) = layout {
                 layout = .terminal(id: id, commandLine: cmd, paneSessionID: sid)
+                KytosAppModel.shared.save()
             }
         }
         paneInitDone = true
@@ -811,6 +829,7 @@ struct PaneWorkspaceTerminalView: View {
             right: .terminal(id: newID, commandLine: KytosSettings.shared.resolvedCommandLine())
         )
         layout = newTree
+        KytosAppModel.shared.save()
         // Resign focus on the old terminal so its cursor becomes hollow
         #if os(macOS)
         if let oldTerminal = KytosTerminalManager.shared.getExistingTerminal(id: terminalID)?.view,
