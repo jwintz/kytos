@@ -532,6 +532,9 @@ final class KytosPaneClient {
         posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
         posix_spawn_file_actions_addopen(&fileActions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0)
         posix_spawn_file_actions_addopen(&fileActions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
+        // Start the server in $HOME so shells inherit it as their cwd.
+        let home = env["HOME"] ?? NSHomeDirectory()
+        posix_spawn_file_actions_addchdir_np(&fileActions, home)
 
         var attr: posix_spawnattr_t?
         posix_spawnattr_init(&attr)

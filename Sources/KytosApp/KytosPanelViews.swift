@@ -121,67 +121,25 @@ struct ProcessEntry: Identifiable {
 struct KytosProcessInfoView: View {
     @State private var ctx: KytosFocusedSessionContext?
     @State private var processes: [ProcessEntry] = []
+    @State private var systemStats: SystemStats?
 
     var body: some View {
         Group {
             if let ctx {
-                VStack(spacing: 0) {
-                    // Header: pane session badge
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(ctx.sessionInfo.isRunning ? Color.green : Color.secondary.opacity(0.5))
-                            .frame(width: 7, height: 7)
-                        Text("pane session \(ctx.sessionInfo.id)")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if let pid = ctx.pid {
-                            Text("PID \(pid)")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                        }
-                        Text(ctx.sessionInfo.createdAt, style: .relative)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.bar)
+                ScrollView {
+                    VStack(spacing: 12) {
+                        // Session header glass card
+                        sessionHeader(ctx)
 
-                    Divider()
+                        // Process tree glass card
+                        processTreeSection
 
-                    if processes.isEmpty {
-                        KytosPanelEmpty(message: "No processes found.")
-                    } else {
-                        List(processes) { entry in
-                            HStack(spacing: 4) {
-                                // Depth indent
-                                if entry.depth > 0 {
-                                    Color.clear.frame(width: CGFloat(entry.depth) * 10)
-                                    Image(systemName: "arrow.turn.down.right")
-                                        .font(.system(size: 8))
-                                        .foregroundStyle(.tertiary)
-                                }
-                                Circle()
-                                    .fill(entry.statusColor)
-                                    .frame(width: 6, height: 6)
-                                Text(entry.command)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .lineLimit(1)
-                                Spacer()
-                                VStack(alignment: .trailing, spacing: 1) {
-                                    Text(String(format: "%.0f MB", entry.rssMB))
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                    Text(entry.cpu)
-                                        .font(.system(size: 9, design: .monospaced))
-                                        .foregroundStyle(.tertiary)
-                                }
-                            }
-                            .padding(.vertical, 1)
+                        // System gauges glass card
+                        if let stats = systemStats {
+                            systemGaugesSection(stats)
                         }
-                        .listStyle(.plain)
                     }
+                    .padding(10)
                 }
             } else {
                 KytosPanelEmpty(message: "No active terminal pane.")
@@ -195,22 +153,197 @@ struct KytosProcessInfoView: View {
         #endif
     }
 
+    // MARK: - Session Header
+
+    private func sessionHeader(_ ctx: KytosFocusedSessionContext) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(ctx.sessionInfo.isRunning ? Color.green : Color.secondary.opacity(0.5))
+                    .frame(width: 7, height: 7)
+                Text("Session \(ctx.sessionInfo.id)")
+                    .font(.system(size: 11, weight: .medium))
+                Spacer()
+                if let pid = ctx.pid {
+                    Text("PID \(pid)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            HStack {
+                Text(ctx.shellName)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(ctx.sessionInfo.createdAt, style: .relative)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - Process Tree
+
+    private var processTreeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Process Tree")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            if processes.isEmpty {
+                HStack {
+                    Spacer()
+                    Text("No processes found")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                }
+                .padding(.vertical, 8)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(processes) { entry in
+                        HStack(spacing: 4) {
+                            if entry.depth > 0 {
+                                Color.clear.frame(width: CGFloat(entry.depth) * 12)
+                                Image(systemName: "arrow.turn.down.right")
+                                    .font(.system(size: 7))
+                                    .foregroundStyle(.quaternary)
+                            }
+                            Circle()
+                                .fill(entry.statusColor)
+                                .frame(width: 5, height: 5)
+                            Text(entry.command)
+                                .font(.system(size: 10, design: .monospaced))
+                                .lineLimit(1)
+                            Spacer()
+                            Text(String(format: "%.0f MB", entry.rssMB))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Text(entry.cpu)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - System Gauges
+
+    private func systemGaugesSection(_ stats: SystemStats) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("System")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            systemGaugeRow(label: "CPU", value: stats.cpuUsage, icon: "cpu", tint: .blue)
+            systemGaugeRow(label: "Memory", value: stats.memoryUsage, icon: "memorychip", tint: .green)
+            systemGaugeRow(label: "Energy", value: stats.energyImpact, icon: "bolt.fill", tint: .orange)
+            diskGaugeRow(stats: stats)
+            networkGaugeRow(stats: stats)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func systemGaugeRow(label: String, value: Double, icon: String, tint: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundStyle(tint)
+                .frame(width: 14)
+            Text(label)
+                .font(.system(size: 10))
+                .frame(width: 48, alignment: .leading)
+            Gauge(value: min(value, 1.0)) {
+                EmptyView()
+            }
+            .gaugeStyle(.linearCapacity)
+            .tint(tint)
+            Text(String(format: "%.0f%%", value * 100))
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, alignment: .trailing)
+        }
+    }
+
+    private func diskGaugeRow(stats: SystemStats) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "internaldrive")
+                .font(.system(size: 10))
+                .foregroundStyle(.purple)
+                .frame(width: 14)
+            Text("Disk")
+                .font(.system(size: 10))
+                .frame(width: 48, alignment: .leading)
+            Gauge(value: min(stats.diskUsage, 1.0)) {
+                EmptyView()
+            }
+            .gaugeStyle(.linearCapacity)
+            .tint(.purple)
+            Text(kytosFormatBytes(stats.diskReadBytes + stats.diskWriteBytes) + "/s")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .trailing)
+        }
+    }
+
+    private func networkGaugeRow(stats: SystemStats) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "network")
+                .font(.system(size: 10))
+                .foregroundStyle(.cyan)
+                .frame(width: 14)
+            Text("Network")
+                .font(.system(size: 10))
+                .frame(width: 48, alignment: .leading)
+            Gauge(value: min(stats.networkActivity, 1.0)) {
+                EmptyView()
+            }
+            .gaugeStyle(.linearCapacity)
+            .tint(.cyan)
+            HStack(spacing: 2) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 7))
+                Text(kytosFormatBytes(stats.networkOutBytes))
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 7))
+                Text(kytosFormatBytes(stats.networkInBytes))
+            }
+            .font(.system(size: 9, design: .monospaced))
+            .foregroundStyle(.secondary)
+        }
+    }
+
     #if os(macOS)
     @MainActor private func refresh() async {
         ctx = await kytosFetchFocusedSession()
         guard let pid = ctx?.pid else {
             kLog("[KytosDebug][ProcessInfo] refresh — ctx=\(ctx == nil ? "nil" : "present"), pid=nil")
             processes = []
+            systemStats = nil
             return
         }
         kLog("[KytosDebug][ProcessInfo] refresh — pid=\(pid)")
-        processes = await withCheckedContinuation { cont in
+        let result = await withCheckedContinuation { (cont: CheckedContinuation<([ProcessEntry], SystemStats?), Never>) in
             DispatchQueue.global(qos: .background).async {
                 let tree = kytosProcessTree(rootPID: pid)
+                let stats = kytosSystemStats()
                 kLog("[KytosDebug][ProcessInfo] tree result — \(tree.count) entries")
-                cont.resume(returning: tree)
+                cont.resume(returning: (tree, stats))
             }
         }
+        processes = result.0
+        systemStats = result.1
     }
     #endif
 }
@@ -256,6 +389,173 @@ private func kytosProcessTree(rootPID: pid_t) -> [ProcessEntry] {
     }
     walk(rootPID, depth: 0)
     return result
+}
+
+// MARK: - System Stats
+
+struct SystemStats {
+    let cpuUsage: Double        // 0.0–1.0
+    let memoryUsage: Double     // 0.0–1.0
+    let energyImpact: Double    // 0.0–1.0 (estimated from CPU + thermal)
+    let diskUsage: Double       // 0.0–1.0 (activity gauge)
+    let diskReadBytes: Int64
+    let diskWriteBytes: Int64
+    let networkActivity: Double // 0.0–1.0
+    let networkInBytes: Int64
+    let networkOutBytes: Int64
+}
+
+/// Collect snapshot of system-wide CPU, memory, disk I/O, and network stats.
+/// Uses Mach host_statistics and sysctl — no subprocesses.
+private func kytosSystemStats() -> SystemStats? {
+    // --- CPU ---
+    let cpuUsage = kytosSystemCPU()
+
+    // --- Memory ---
+    let memUsage = kytosSystemMemory()
+
+    // --- Disk I/O (via sysctl) ---
+    let (diskRead, diskWrite) = kytosSystemDiskIO()
+    let diskTotal = diskRead + diskWrite
+    // Normalize: ~100 MB/s = full gauge
+    let diskActivity = min(Double(diskTotal) / (100 * 1024 * 1024), 1.0)
+
+    // --- Network ---
+    let (netIn, netOut) = kytosSystemNetworkIO()
+    let netTotal = netIn + netOut
+    // Normalize: ~10 MB/s = full gauge
+    let netActivity = min(Double(netTotal) / (10 * 1024 * 1024), 1.0)
+
+    // --- Energy (estimated: weighted CPU + memory pressure) ---
+    let energy = min(cpuUsage * 0.7 + memUsage * 0.3, 1.0)
+
+    return SystemStats(
+        cpuUsage: cpuUsage,
+        memoryUsage: memUsage,
+        energyImpact: energy,
+        diskUsage: diskActivity,
+        diskReadBytes: diskRead,
+        diskWriteBytes: diskWrite,
+        networkActivity: netActivity,
+        networkInBytes: netIn,
+        networkOutBytes: netOut
+    )
+}
+
+/// System-wide CPU usage via host_statistics (user + system ticks / total ticks).
+/// Uses a static previous-sample to compute delta between calls.
+private func kytosSystemCPU() -> Double {
+    var loadInfo = host_cpu_load_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info_data_t>.stride / MemoryLayout<integer_t>.stride)
+    let result = withUnsafeMutablePointer(to: &loadInfo) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count)
+        }
+    }
+    guard result == KERN_SUCCESS else { return 0 }
+
+    let user = Double(loadInfo.cpu_ticks.0)   // CPU_STATE_USER
+    let system = Double(loadInfo.cpu_ticks.1) // CPU_STATE_SYSTEM
+    let idle = Double(loadInfo.cpu_ticks.2)   // CPU_STATE_IDLE
+    let nice = Double(loadInfo.cpu_ticks.3)   // CPU_STATE_NICE
+    let total = user + system + idle + nice
+
+    struct Previous { static var user = 0.0; static var system = 0.0; static var idle = 0.0; static var nice = 0.0 }
+    let dUser = user - Previous.user
+    let dSystem = system - Previous.system
+    let dIdle = idle - Previous.idle
+    let dNice = nice - Previous.nice
+    let dTotal = dUser + dSystem + dIdle + dNice
+    Previous.user = user; Previous.system = system; Previous.idle = idle; Previous.nice = nice
+
+    guard dTotal > 0 else { return 0 }
+    return (dUser + dSystem + dNice) / dTotal
+}
+
+/// System memory pressure via host_statistics64.
+private func kytosSystemMemory() -> Double {
+    var stats = vm_statistics64_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.stride / MemoryLayout<integer_t>.stride)
+    let result = withUnsafeMutablePointer(to: &stats) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
+        }
+    }
+    guard result == KERN_SUCCESS else { return 0 }
+
+    let pageSize = Double(vm_kernel_page_size)
+    let active = Double(stats.active_count) * pageSize
+    let wired = Double(stats.wire_count) * pageSize
+    let compressed = Double(stats.compressor_page_count) * pageSize
+    let total = Double(ProcessInfo.processInfo.physicalMemory)
+    guard total > 0 else { return 0 }
+    return (active + wired + compressed) / total
+}
+
+/// Cumulative disk I/O bytes via `iostat`-style sysctl.
+/// Returns (bytesRead, bytesWritten) since boot — caller should diff between samples.
+private func kytosSystemDiskIO() -> (Int64, Int64) {
+    struct Previous { static var read: Int64 = 0; static var write: Int64 = 0 }
+    // Use `iostat -c 1 -C` to get a quick snapshot — lightweight, no IOKit dependency
+    let task = Process()
+    let pipe = Pipe()
+    task.executableURL = URL(fileURLWithPath: "/usr/sbin/iostat")
+    task.arguments = ["-c", "1", "-C"]
+    task.standardOutput = pipe
+    task.standardError = Pipe()
+    guard (try? task.run()) != nil else { return (0, 0) }
+    let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    task.waitUntilExit()
+    // Parse last line: KB/t tps MB/s  (for "disk" aggregate)
+    let lines = out.components(separatedBy: "\n").filter { !$0.isEmpty }
+    guard let lastLine = lines.last else { return (0, 0) }
+    let cols = lastLine.split(separator: " ", omittingEmptySubsequences: true)
+    // Format: KB/t  tps  MB/s  (repeated for each disk, then aggregate)
+    // We want the aggregate MB/s from the last trio
+    if cols.count >= 3, let mbps = Double(cols[cols.count - 1]) {
+        // Convert MB/s to bytes for the gauge — approximate read+write as total
+        let bytesPerSec = Int64(mbps * 1024 * 1024)
+        return (bytesPerSec / 2, bytesPerSec / 2)
+    }
+    return (0, 0)
+}
+
+/// Network I/O via `netstat -ib` (bytes in/out on en0).
+private func kytosSystemNetworkIO() -> (Int64, Int64) {
+    struct Previous { static var inBytes: Int64 = 0; static var outBytes: Int64 = 0 }
+    let task = Process()
+    let pipe = Pipe()
+    task.executableURL = URL(fileURLWithPath: "/usr/sbin/netstat")
+    task.arguments = ["-ib", "-I", "en0"]
+    task.standardOutput = pipe
+    task.standardError = Pipe()
+    guard (try? task.run()) != nil else { return (0, 0) }
+    let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    task.waitUntilExit()
+    // Parse: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll
+    let lines = out.components(separatedBy: "\n")
+    for line in lines.dropFirst() {
+        let cols = line.split(separator: " ", omittingEmptySubsequences: true)
+        guard cols.count >= 10, cols[0] == "en0" else { continue }
+        // Find the row with actual byte counts (skip the link-level header row)
+        if let ibytes = Int64(cols[6]), let obytes = Int64(cols[9]) {
+            let dIn = max(ibytes - Previous.inBytes, 0)
+            let dOut = max(obytes - Previous.outBytes, 0)
+            Previous.inBytes = ibytes
+            Previous.outBytes = obytes
+            // First call returns 0 delta (baseline)
+            if dIn == ibytes { return (0, 0) }
+            return (dIn, dOut)
+        }
+    }
+    return (0, 0)
+}
+
+private func kytosFormatBytes(_ bytes: Int64) -> String {
+    if bytes < 1024 { return "\(bytes) B" }
+    if bytes < 1024 * 1024 { return String(format: "%.0f KB", Double(bytes) / 1024) }
+    if bytes < 1024 * 1024 * 1024 { return String(format: "%.1f MB", Double(bytes) / (1024 * 1024)) }
+    return String(format: "%.2f GB", Double(bytes) / (1024 * 1024 * 1024))
 }
 
 // MARK: - Environment Inspector

@@ -476,6 +476,14 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
     func makeNSView(context: Context) -> TerminalView {
         let terminal = KytosTerminalManager.shared.getOrCreateTerminal(id: terminalID, colorScheme: colorScheme, commandLine: commandLine, paneSessionID: paneSessionID).view
         updateTerminalAppearance(terminal)
+        // Re-trigger sizeChanged after layout changes (e.g. new splits)
+        NotificationCenter.default.addObserver(forName: NSNotification.Name("KytosLayoutChanged"), object: nil, queue: .main) { [weak terminal] _ in
+            guard let tv = terminal else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                tv.needsLayout = true
+                tv.layoutSubtreeIfNeeded()
+            }
+        }
         return terminal
     }
     
@@ -741,13 +749,6 @@ struct PaneWorkspaceTerminalView: View {
                 )
                 .padding(.horizontal, settings.horizontalMargin)
                 .background(Color.clear)
-                .focusable()
-                .focused($isFocused)
-                .focusedValue(\.kytosFocusedTerminalID, isFocused ? terminalID : nil)
-                .onTapGesture {
-                    isFocused = true
-                    NotificationCenter.default.post(name: NSNotification.Name("KytosRequestFocus"), object: terminalID)
-                }
                 .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosWorkspaceAction"))) { notification in
                     guard let userInfo = notification.userInfo,
                           let id = userInfo["id"] as? UUID,
@@ -907,6 +908,10 @@ struct PaneWorkspaceTerminalView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             kLog("[KytosDebug][Split] Requesting focus for new pane \(newID.uuidString.prefix(8))")
             NotificationCenter.default.post(name: NSNotification.Name("KytosRequestFocus"), object: newID)
+        }
+        // Tell all terminals to recalculate their size after the layout change settles
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NotificationCenter.default.post(name: NSNotification.Name("KytosLayoutChanged"), object: nil)
         }
     }
 }
@@ -1147,6 +1152,9 @@ struct KytosApp: App {
                     navigatorTabs: KytosNavigatorTab.allCases,
                     inspectorTabs: KytosInspectorTab.allCases,
                     utilityTabs: KytosUtilityTab.allCases,
+                    settingsView: {
+                        AnyView(KytosSettingsWindowView(shellState: settingsShellState))
+                    },
                     detail: { 
                         PaneWorkspaceView()
                     }
@@ -1277,6 +1285,8 @@ struct KytosWindowView: View {
         .environment(workspace)
         .focusedSceneValue(\.kytosFocusedWindowID, stableID)
         .background { WindowRegistrar(windowID: stableID) }
+        .onChange(of: shellState.navigatorVisible) { _, _ in refocusActiveTerminal() }
+        .onChange(of: shellState.inspectorVisible) { _, _ in refocusActiveTerminal() }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KelyphosCommandInvoked"))) { notification in
             guard let userInfo = notification.userInfo,
                   let label = userInfo["label"] as? String else { return }
@@ -1310,10 +1320,16 @@ struct KytosWindowView: View {
             }
         }
     }
+
+    /// Re-focus the last active terminal after sidebar toggles steal focus.
+    private func refocusActiveTerminal() {
+        guard let tid = KytosTerminalManager.shared.lastKnownActiveTerminalID else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            NotificationCenter.default.post(name: NSNotification.Name("KytosRequestFocus"), object: tid)
+        }
+    }
 }
 #endif
-
-// MARK: - Window → UUID registrar
 
 /// Zero-size background view that registers an NSWindow with KytosAppModel
 /// so tab group structure can be snapshotted at quit time.
