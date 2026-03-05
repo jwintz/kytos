@@ -421,5 +421,16 @@ public final class KytosAppModel {
             }
         }
     }
+
+    /// Called when the pane server is detected as unreachable — clears all session IDs
+    /// so terminals will create fresh sessions on the new server.
+    @MainActor
+    func reconcileAfterServerRestart() {
+        kLog("[KytosDebug][AppModel] reconcileAfterServerRestart — clearing all session IDs")
+        for workspace in windows.values {
+            workspace.session.layout = workspace.session.layout
+                .clearingDeadSessions([])
+        }
+    }
     #endif
 }

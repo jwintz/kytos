@@ -508,6 +508,8 @@ class KytosTerminalManager {
     }
     
     private var terminals: [UUID: ManagedTerminal] = [:]
+    /// Maps terminal UUIDs to their pane session IDs for reconnection after stream drops.
+    private var terminalSessionIDs: [UUID: String] = [:]
 
     /// Guards against multiple concurrent session creations for the same terminal UUID.
     /// When SwiftUI re-renders, multiple `initPaneSession()` calls can fire before any completes;
@@ -602,6 +604,7 @@ class KytosTerminalManager {
             // Don't call startStream yet — defer to the first sizeChanged so we
             // attach at the real terminal dimensions, not the 800×600 default.
             streamCoord.pendingSessionID = sid
+            KytosTerminalManager.shared.registerSessionID(sid, for: id)
         } else {
             coordinator.start(commandLine: commandLine)
         }
@@ -669,6 +672,15 @@ class KytosTerminalManager {
 
     func removeTerminal(id: UUID) {
         terminals.removeValue(forKey: id)
+        terminalSessionIDs.removeValue(forKey: id)
+    }
+
+    func sessionID(for id: UUID) -> String? {
+        terminalSessionIDs[id]
+    }
+
+    func registerSessionID(_ sessionID: String, for terminalID: UUID) {
+        terminalSessionIDs[terminalID] = sessionID
     }
 }
 
@@ -728,6 +740,7 @@ struct PaneWorkspaceTerminalView: View {
             resolvedSessionID = newID
             if case .terminal(let id, let cmd, _) = layout {
                 layout = .terminal(id: id, commandLine: cmd, paneSessionID: newID)
+                KytosTerminalManager.shared.registerSessionID(newID, for: id)
                 KytosAppModel.shared.save()
             }
             kLog("[KytosDebug][initPaneSession] session replaced: \(oldID) → \(newID)")

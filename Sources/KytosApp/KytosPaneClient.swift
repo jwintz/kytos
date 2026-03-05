@@ -391,12 +391,35 @@ final class KytosPaneClient {
 
     @discardableResult
     func createSession(commandLine: [String], name: String? = nil) throws -> KytosPaneSessionInfo {
+        // First ensure the server is reachable. If not, start it and reconcile
+        // before creating — this prevents a fresh server from assigning IDs that
+        // collide with existing (now-dead) sessions.
+        ensureServerReachable()
         let req = KytosPaneRequest(command: .createSession, name: name, commandLine: commandLine)
         let response = try sendControl(req, allowStart: true)
         guard response.ok, let session = response.session else {
             throw KytosPaneError.invalidResponse
         }
         return session
+    }
+
+    /// Checks whether the server is reachable. If not, clears the `serverStarted`
+    /// flag so `openConnection(allowStart:)` will restart it and dispatch
+    /// reconciliation to clean up stale session IDs.
+    private func ensureServerReachable() {
+        do {
+            let fd = try connectOnce()
+            Darwin.close(fd)
+        } catch {
+            serverStartLock.lock()
+            serverStarted = false
+            serverStartLock.unlock()
+            kLog("[KytosDebug][PaneClient] ensureServerReachable — server unreachable, will restart on next connect")
+            // Dispatch reconciliation so stale session IDs are cleared from layout
+            DispatchQueue.main.async {
+                KytosAppModel.shared.reconcileAfterServerRestart()
+            }
+        }
     }
 
     func listSessions() throws -> [KytosPaneSessionInfo] {

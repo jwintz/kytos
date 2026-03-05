@@ -18,6 +18,12 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
         get { lock.withLock { _connection } }
         set { lock.withLock { _connection = newValue } }
     }
+    /// Prevents multiple concurrent startStream calls from racing on the readQueue.
+    private var _streaming = false
+    private var streaming: Bool {
+        get { lock.withLock { _streaming } }
+        set { lock.withLock { _streaming = newValue } }
+    }
     private let readQueue = DispatchQueue(label: "kytos.pane.stream.read", qos: .userInitiated)
     private let writeQueue = DispatchQueue(label: "kytos.pane.stream.write", qos: .userInteractive)
 
@@ -30,6 +36,12 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
             kLog("[KytosDebug][PaneStream] startStream — no terminalView!")
             return
         }
+        // Prevent multiple concurrent startStream calls from racing.
+        guard !streaming else {
+            kLog("[KytosDebug][PaneStream] startStream session=\(sessionID) — already streaming, skipping")
+            return
+        }
+        streaming = true
         kLog("[KytosDebug][PaneStream] startStream session=\(sessionID) cols=\(cols) rows=\(rows)")
 
         readQueue.async { [weak self] in
@@ -185,11 +197,8 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
         }
         kLog("[KytosDebug][PaneStream] Stream ended for terminal \(terminalID?.uuidString.prefix(8) ?? "?")")
         connection = nil
-        if let id = terminalID {
-            DispatchQueue.main.async {
-                KytosTerminalManager.shared.removeTerminal(id: id)
-            }
-        }
+        streaming = false
+        // Don't remove terminal from manager — the view can reconnect on next sizeChanged.
     }
 
     // MARK: - TerminalViewDelegate overrides
@@ -212,6 +221,16 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
             lastCols = newCols
             lastRows = newRows
             kLog("[KytosDebug][PaneStream] sizeChanged triggering startStream for pending session \(sid), \(newCols)x\(newRows)")
+            startStream(sessionID: sid, cols: newCols, rows: newRows)
+            return
+        }
+
+        // Reconnect if the stream died (connection nil + streaming cleared by readLoop)
+        if connection == nil, !streaming, pendingSessionID == nil,
+           let sid = terminalID.flatMap({ KytosTerminalManager.shared.sessionID(for: $0) }) {
+            lastCols = newCols
+            lastRows = newRows
+            kLog("[KytosDebug][PaneStream] sizeChanged reconnecting for session \(sid), \(newCols)x\(newRows)")
             startStream(sessionID: sid, cols: newCols, rows: newRows)
             return
         }
