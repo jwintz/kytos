@@ -113,7 +113,11 @@ struct KytosSessionsSidebar: View {
             if !orphaned.isEmpty {
                 Section(header: Text("Orphaned")) {
                     ForEach(Array(orphaned), id: \.id) { session in
-                        OrphanedSessionRow(session: session, onKill: { killSession(session.id) })
+                        OrphanedSessionRow(
+                            session: session,
+                            onRevive: { reviveOrphan(session) },
+                            onKill: { killSession(session.id) }
+                        )
                     }
                 }
             }
@@ -148,6 +152,24 @@ struct KytosSessionsSidebar: View {
         DispatchQueue.global(qos: .background).async {
             try? KytosPaneClient.shared.destroySession(id: id)
             Task { @MainActor in await refreshSessions() }
+        }
+    }
+
+    /// Revive an orphaned pane session by adding it as a new split in the current layout.
+    private func reviveOrphan(_ session: KytosPaneSessionInfo) {
+        let newID = UUID()
+        let newLeaf = PaneLayoutTree.terminal(id: newID, commandLine: nil, paneSessionID: session.id)
+        workspace.session.layout = .split(
+            axis: .horizontal,
+            left: workspace.session.layout,
+            right: newLeaf
+        )
+        KytosAppModel.shared.save()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            NotificationCenter.default.post(name: NSNotification.Name("KytosRequestFocus"), object: newID)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NotificationCenter.default.post(name: NSNotification.Name("KytosLayoutChanged"), object: nil)
         }
     }
     #endif
@@ -220,7 +242,9 @@ private struct PaneLeafRow: View {
 
 private struct OrphanedSessionRow: View {
     let session: KytosPaneSessionInfo
+    let onRevive: () -> Void
     let onKill: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -237,15 +261,33 @@ private struct OrphanedSessionRow: View {
                     .foregroundStyle(.tertiary)
             }
             Spacer()
+            if isHovered {
+                Button(action: onRevive) {
+                    Image(systemName: "arrow.uturn.backward.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.green)
+                }
+                .buttonStyle(.plain)
+                .help("Revive session")
+            }
             Button(action: onKill) {
                 Image(systemName: "xmark.circle")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .opacity(isHovered ? 1 : 0)
             .help("Kill orphaned session")
         }
         .padding(.vertical, 2)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(isHovered ? Color.secondary.opacity(0.12) : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .onTapGesture(perform: onRevive)
     }
 }
 #endif
@@ -1183,9 +1225,7 @@ struct KytosWindowView: View {
         let resolvedID = windowID.wrappedValue ?? UUID()
         self._stableID = State(initialValue: resolvedID)
         self.appModel = appModel
-        let state = KelyphosShellState(persistencePrefix: "me.jwintz.kytos.\(resolvedID.uuidString.prefix(8))")
-        state.navigatorVisible = false
-        state.utilityAreaVisible = false
+        let state = KelyphosShellState(persistencePrefix: "me.jwintz.kytos")
         self._shellState = State(initialValue: state)
         kLog("[KytosDebug][WindowView] init — windowID=\(windowID.wrappedValue?.uuidString.prefix(8) ?? "nil"), stableID=\(resolvedID.uuidString.prefix(8))")
     }
@@ -1285,8 +1325,17 @@ struct KytosWindowView: View {
         .environment(workspace)
         .focusedSceneValue(\.kytosFocusedWindowID, stableID)
         .background { WindowRegistrar(windowID: stableID) }
-        .onChange(of: shellState.navigatorVisible) { _, _ in refocusActiveTerminal() }
-        .onChange(of: shellState.inspectorVisible) { _, _ in refocusActiveTerminal() }
+        .onChange(of: shellState.navigatorVisible) { _, _ in
+            refocusActiveTerminal()
+            shellState.savePanelState()
+        }
+        .onChange(of: shellState.inspectorVisible) { _, _ in
+            refocusActiveTerminal()
+            shellState.savePanelState()
+        }
+        .onChange(of: shellState.utilityAreaVisible) { _, _ in
+            shellState.savePanelState()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KelyphosCommandInvoked"))) { notification in
             guard let userInfo = notification.userInfo,
                   let label = userInfo["label"] as? String else { return }

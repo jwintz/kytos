@@ -244,83 +244,48 @@ struct KytosProcessInfoView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            systemGaugeRow(label: "CPU", value: stats.cpuUsage, icon: "cpu", tint: .blue)
-            systemGaugeRow(label: "Memory", value: stats.memoryUsage, icon: "memorychip", tint: .green)
-            systemGaugeRow(label: "Energy", value: stats.energyImpact, icon: "bolt.fill", tint: .orange)
-            diskGaugeRow(stats: stats)
-            networkGaugeRow(stats: stats)
+            glassGaugeRow(label: "CPU", value: stats.cpuUsage, icon: "cpu", tint: .blue,
+                          detail: String(format: "%.0f%%", stats.cpuUsage * 100))
+            glassGaugeRow(label: "Memory", value: stats.memoryUsage, icon: "memorychip", tint: .green,
+                          detail: String(format: "%.0f%%", stats.memoryUsage * 100))
+            glassGaugeRow(label: "Energy", value: stats.energyImpact, icon: "bolt.fill", tint: .orange,
+                          detail: String(format: "%.0f%%", stats.energyImpact * 100))
+            glassGaugeRow(label: "Disk", value: stats.diskUsage, icon: "internaldrive", tint: .purple,
+                          detail: kytosFormatBytes(stats.diskReadBytes + stats.diskWriteBytes) + "/s")
+            glassGaugeRow(label: "Network", value: stats.networkActivity, icon: "network", tint: .cyan,
+                          detail: "↑\(kytosFormatBytes(stats.networkOutBytes)) ↓\(kytosFormatBytes(stats.networkInBytes))")
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func systemGaugeRow(label: String, value: Double, icon: String, tint: Color) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 10))
-                .foregroundStyle(tint)
-                .frame(width: 14)
-            Text(label)
-                .font(.system(size: 10))
-                .frame(width: 48, alignment: .leading)
-            Gauge(value: min(value, 1.0)) {
-                EmptyView()
+    private func glassGaugeRow(label: String, value: Double, icon: String, tint: Color, detail: String) -> some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 9))
+                    .foregroundStyle(tint)
+                    .frame(width: 12)
+                Text(label)
+                    .font(.system(size: 10))
+                Spacer()
+                Text(detail)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
             }
-            .gaugeStyle(.linearCapacity)
-            .tint(tint)
-            Text(String(format: "%.0f%%", value * 100))
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .frame(width: 32, alignment: .trailing)
-        }
-    }
-
-    private func diskGaugeRow(stats: SystemStats) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "internaldrive")
-                .font(.system(size: 10))
-                .foregroundStyle(.purple)
-                .frame(width: 14)
-            Text("Disk")
-                .font(.system(size: 10))
-                .frame(width: 48, alignment: .leading)
-            Gauge(value: min(stats.diskUsage, 1.0)) {
-                EmptyView()
+            // Liquid glass gauge bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(.quaternary)
+                    Capsule()
+                        .fill(tint.gradient)
+                        .frame(width: max(geo.size.width * min(value, 1.0), 2))
+                }
             }
-            .gaugeStyle(.linearCapacity)
-            .tint(.purple)
-            Text(kytosFormatBytes(stats.diskReadBytes + stats.diskWriteBytes) + "/s")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .frame(width: 52, alignment: .trailing)
-        }
-    }
-
-    private func networkGaugeRow(stats: SystemStats) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "network")
-                .font(.system(size: 10))
-                .foregroundStyle(.cyan)
-                .frame(width: 14)
-            Text("Network")
-                .font(.system(size: 10))
-                .frame(width: 48, alignment: .leading)
-            Gauge(value: min(stats.networkActivity, 1.0)) {
-                EmptyView()
-            }
-            .gaugeStyle(.linearCapacity)
-            .tint(.cyan)
-            HStack(spacing: 2) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 7))
-                Text(kytosFormatBytes(stats.networkOutBytes))
-                Image(systemName: "arrow.down")
-                    .font(.system(size: 7))
-                Text(kytosFormatBytes(stats.networkInBytes))
-            }
-            .font(.system(size: 9, design: .monospaced))
-            .foregroundStyle(.secondary)
+            .frame(height: 6)
+            .glassEffect(in: Capsule())
         }
     }
 
