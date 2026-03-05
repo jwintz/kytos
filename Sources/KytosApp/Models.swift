@@ -167,6 +167,14 @@ public enum PaneLayoutTree: Codable, Hashable {
         }
     }
 
+    /// Number of terminal leaves in this subtree.
+    var leafCount: Int {
+        switch self {
+        case .terminal: return 1
+        case .split(_, let left, let right): return left.leafCount + right.leafCount
+        }
+    }
+
     /// Returns a copy of the tree where any terminal leaf whose paneSessionID is not
     /// in `liveSessions` has its paneSessionID cleared (set to nil), so the view will
     /// create a fresh session on next appear.

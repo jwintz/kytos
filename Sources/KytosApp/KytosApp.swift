@@ -562,6 +562,36 @@ class KytosTerminalManager {
     private var terminals: [UUID: ManagedTerminal] = [:]
     /// Maps terminal UUIDs to their pane session IDs for reconnection after stream drops.
     private var terminalSessionIDs: [UUID: String] = [:]
+    /// Per-pane font size overrides (nil = use global KytosSettings.shared.fontSize)
+    private var fontSizeOverrides: [UUID: CGFloat] = [:]
+
+    func fontSizeForPane(_ id: UUID) -> CGFloat {
+        fontSizeOverrides[id] ?? KytosSettings.shared.fontSize
+    }
+
+    func adjustFontSize(for id: UUID, delta: CGFloat) {
+        let current = fontSizeForPane(id)
+        fontSizeOverrides[id] = min(max(current + delta, 8), 36)
+        // Trigger view update
+        if let tv = terminals[id]?.view {
+            let size = fontSizeOverrides[id]!
+            let fontName = KytosSettings.shared.fontFamily
+            #if os(macOS)
+            tv.font = NSFont(name: fontName, size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+            #endif
+        }
+    }
+
+    func resetFontSize(for id: UUID) {
+        fontSizeOverrides.removeValue(forKey: id)
+        if let tv = terminals[id]?.view {
+            let size = KytosSettings.shared.fontSize
+            let fontName = KytosSettings.shared.fontFamily
+            #if os(macOS)
+            tv.font = NSFont(name: fontName, size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+            #endif
+        }
+    }
 
     /// Guards against multiple concurrent session creations.
     /// Ensures only one terminal creates at a time, preventing race conditions
@@ -1022,42 +1052,57 @@ struct PaneLayoutTreeView: View {
         case .terminal(let id, let commandLine, let sessionID):
             PaneWorkspaceTerminalView(terminalID: id, commandLine: commandLine, paneSessionID: sessionID, layout: $layout)
                 .id(id)  // Preserve @State across layout mutations (e.g. paneSessionID written back)
-        case .split(let axis, _, _):
+        case .split(let axis, let left, let right):
+            let leftWeight = CGFloat(left.leafCount)
+            let rightWeight = CGFloat(right.leafCount)
+            let total = leftWeight + rightWeight
             if axis == .horizontal {
-                HStack(spacing: 0) {
-                    PaneLayoutTreeView(layout: Binding(
-                        get: {
-                            if case .split(_, let l, _) = layout { return l }
-                            return layout
-                        },
-                        set: { updateLeft(to: $0) }
-                    ))
-                    Divider()
-                    PaneLayoutTreeView(layout: Binding(
-                        get: {
-                            if case .split(_, _, let r) = layout { return r }
-                            return layout
-                        },
-                        set: { updateRight(to: $0) }
-                    ))
+                GeometryReader { geo in
+                    let leftW = geo.size.width * leftWeight / total
+                    let rightW = geo.size.width * rightWeight / total
+                    HStack(spacing: 0) {
+                        PaneLayoutTreeView(layout: Binding(
+                            get: {
+                                if case .split(_, let l, _) = layout { return l }
+                                return layout
+                            },
+                            set: { updateLeft(to: $0) }
+                        ))
+                        .frame(width: leftW)
+                        Divider()
+                        PaneLayoutTreeView(layout: Binding(
+                            get: {
+                                if case .split(_, _, let r) = layout { return r }
+                                return layout
+                            },
+                            set: { updateRight(to: $0) }
+                        ))
+                        .frame(width: rightW)
+                    }
                 }
             } else {
-                VStack(spacing: 0) {
-                    PaneLayoutTreeView(layout: Binding(
-                        get: {
-                            if case .split(_, let l, _) = layout { return l }
-                            return layout
-                        },
-                        set: { updateLeft(to: $0) }
-                    ))
-                    Divider()
-                    PaneLayoutTreeView(layout: Binding(
-                        get: {
-                            if case .split(_, _, let r) = layout { return r }
-                            return layout
-                        },
-                        set: { updateRight(to: $0) }
-                    ))
+                GeometryReader { geo in
+                    let leftH = geo.size.height * leftWeight / total
+                    let rightH = geo.size.height * rightWeight / total
+                    VStack(spacing: 0) {
+                        PaneLayoutTreeView(layout: Binding(
+                            get: {
+                                if case .split(_, let l, _) = layout { return l }
+                                return layout
+                            },
+                            set: { updateLeft(to: $0) }
+                        ))
+                        .frame(height: leftH)
+                        Divider()
+                        PaneLayoutTreeView(layout: Binding(
+                            get: {
+                                if case .split(_, _, let r) = layout { return r }
+                                return layout
+                            },
+                            set: { updateRight(to: $0) }
+                        ))
+                        .frame(height: rightH)
+                    }
                 }
             }
         }
@@ -1190,6 +1235,21 @@ struct KytosApp: App {
                         )
                         return nil
                     }
+                case 24: // ⌘+ — Increase font size (active pane)
+                    if let id = KytosTerminalManager.shared.lastKnownActiveTerminalID {
+                        KytosTerminalManager.shared.adjustFontSize(for: id, delta: 1)
+                    }
+                    return nil
+                case 27: // ⌘- — Decrease font size (active pane)
+                    if let id = KytosTerminalManager.shared.lastKnownActiveTerminalID {
+                        KytosTerminalManager.shared.adjustFontSize(for: id, delta: -1)
+                    }
+                    return nil
+                case 29: // ⌘0 — Reset font size (active pane)
+                    if let id = KytosTerminalManager.shared.lastKnownActiveTerminalID {
+                        KytosTerminalManager.shared.resetFontSize(for: id)
+                    }
+                    return nil
                 default:
                     break
                 }
@@ -1398,13 +1458,22 @@ struct KytosWindowView: View {
         .onChange(of: shellState.navigatorVisible) { _, newVal in
             refocusActiveTerminal()
             navigatorVisible = newVal
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                NotificationCenter.default.post(name: NSNotification.Name("KytosLayoutChanged"), object: nil)
+            }
         }
         .onChange(of: shellState.inspectorVisible) { _, newVal in
             refocusActiveTerminal()
             inspectorVisible = newVal
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                NotificationCenter.default.post(name: NSNotification.Name("KytosLayoutChanged"), object: nil)
+            }
         }
         .onChange(of: shellState.utilityAreaVisible) { _, newVal in
             utilityVisible = newVal
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                NotificationCenter.default.post(name: NSNotification.Name("KytosLayoutChanged"), object: nil)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KelyphosCommandInvoked"))) { notification in
             guard let userInfo = notification.userInfo,
