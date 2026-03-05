@@ -147,6 +147,16 @@ public enum PaneLayoutTree: Codable, Hashable {
         }
     }
 
+    /// Looks up the paneSessionID for a terminal UUID in this tree.
+    func sessionID(for terminalID: UUID) -> String? {
+        switch self {
+        case .terminal(let id, _, let sid):
+            return id == terminalID ? sid : nil
+        case .split(_, let left, let right):
+            return left.sessionID(for: terminalID) ?? right.sessionID(for: terminalID)
+        }
+    }
+
     /// Returns all (terminalID, paneSessionID?) leaf pairs.
     func allTerminalLeaves() -> [(id: UUID, commandLine: [String]?, sessionID: String?)] {
         switch self {
@@ -246,6 +256,38 @@ public final class KytosAppModel {
     public static let shared = KytosAppModel()
 
     public var windows: [UUID: KytosWorkspace] = [:]
+
+    #if os(macOS)
+    /// Set after `reconcileSessionsOnLaunch` completes. Gates `initPaneSession`
+    /// to prevent using stale session IDs before dedup/clearing runs.
+    @ObservationIgnored public private(set) var reconciliationDone = false
+    private let reconciliationLock = NSLock()
+    private var reconciliationContinuations: [CheckedContinuation<Void, Never>] = []
+
+    /// Waits until session reconciliation has completed (dedup + dead session clearing).
+    public func waitForReconciliation() async {
+        reconciliationLock.lock()
+        if reconciliationDone {
+            reconciliationLock.unlock()
+            return
+        }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            reconciliationContinuations.append(cont)
+            reconciliationLock.unlock()
+        }
+    }
+
+    private func signalReconciliationDone() {
+        reconciliationLock.lock()
+        reconciliationDone = true
+        let pending = reconciliationContinuations
+        reconciliationContinuations = []
+        reconciliationLock.unlock()
+        for cont in pending {
+            cont.resume()
+        }
+    }
+    #endif
 
     private init() {
         load()
@@ -388,6 +430,7 @@ public final class KytosAppModel {
         }
         guard !allPersistedIDs.isEmpty else {
             kLog("[KytosDebug][AppModel] reconcile — no persisted session IDs, skipping")
+            signalReconciliationDone()
             return
         }
 
@@ -419,17 +462,7 @@ public final class KytosAppModel {
                     .clearingDeadSessions(liveSessions)
                     .deduplicatingSessions(&seenSessionIDs)
             }
-        }
-    }
-
-    /// Called when the pane server is detected as unreachable — clears all session IDs
-    /// so terminals will create fresh sessions on the new server.
-    @MainActor
-    func reconcileAfterServerRestart() {
-        kLog("[KytosDebug][AppModel] reconcileAfterServerRestart — clearing all session IDs")
-        for workspace in windows.values {
-            workspace.session.layout = workspace.session.layout
-                .clearingDeadSessions([])
+            signalReconciliationDone()
         }
     }
     #endif

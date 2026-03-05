@@ -46,6 +46,7 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
 
         readQueue.async { [weak self] in
             guard let self else { return }
+            defer { self.streaming = false }
 
             var effectiveID = sessionID
 
@@ -197,7 +198,6 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
         }
         kLog("[KytosDebug][PaneStream] Stream ended for terminal \(terminalID?.uuidString.prefix(8) ?? "?")")
         connection = nil
-        streaming = false
         // Don't remove terminal from manager — the view can reconnect on next sizeChanged.
     }
 

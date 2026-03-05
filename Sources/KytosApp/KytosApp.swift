@@ -511,18 +511,23 @@ class KytosTerminalManager {
     /// Maps terminal UUIDs to their pane session IDs for reconnection after stream drops.
     private var terminalSessionIDs: [UUID: String] = [:]
 
-    /// Guards against multiple concurrent session creations for the same terminal UUID.
-    /// When SwiftUI re-renders, multiple `initPaneSession()` calls can fire before any completes;
-    /// only the first should create a session.
+    /// Guards against multiple concurrent session creations.
+    /// Ensures only one terminal creates at a time, preventing race conditions
+    /// where two terminals both get the same session ID from the server.
     private var sessionCreationInFlight: Set<UUID> = []
     private let creationLock = NSLock()
+    /// Global creation semaphore — only one session can be created at a time.
+    private var globalCreationInFlight = false
 
-    /// Attempts to claim the right to create a pane session for the given terminal UUID.
-    /// Returns `true` if the caller should proceed; `false` if another call is already in flight.
+    /// Attempts to claim the right to create a pane session.
+    /// Returns `true` if the caller should proceed; `false` if another creation is in flight.
     func claimSessionCreation(for id: UUID) -> Bool {
         creationLock.lock()
         defer { creationLock.unlock() }
-        return sessionCreationInFlight.insert(id).inserted
+        guard !globalCreationInFlight else { return false }
+        guard sessionCreationInFlight.insert(id).inserted else { return false }
+        globalCreationInFlight = true
+        return true
     }
 
     /// Releases the creation claim after the session has been created (or failed).
@@ -530,6 +535,13 @@ class KytosTerminalManager {
         creationLock.lock()
         defer { creationLock.unlock() }
         sessionCreationInFlight.remove(id)
+        globalCreationInFlight = false
+    }
+
+    func hasCreationClaim(for id: UUID) -> Bool {
+        creationLock.lock()
+        defer { creationLock.unlock() }
+        return sessionCreationInFlight.contains(id)
     }
 
     /// The last terminal that was the key window's first responder.
@@ -600,7 +612,17 @@ class KytosTerminalManager {
         coordinator.terminalView = terminal
         terminal.terminalDelegate = coordinator
         #if os(macOS)
-        if let sid = paneSessionID, let streamCoord = coordinator as? KytosPaneStreamingCoordinator {
+        // Check for session ID collision: if another terminal already has this session ID,
+        // clear it to prevent both terminals sharing the same pane session.
+        var effectiveSID = paneSessionID
+        if let sid = effectiveSID {
+            let collision = terminalSessionIDs.first { $0.key != id && $0.value == sid }
+            if collision != nil {
+                kLog("[KytosDebug][TermMgr] session \(sid) collision — already used by \(collision!.key.uuidString.prefix(8)), clearing for \(id.uuidString.prefix(8))")
+                effectiveSID = nil
+            }
+        }
+        if let sid = effectiveSID, let streamCoord = coordinator as? KytosPaneStreamingCoordinator {
             // Don't call startStream yet — defer to the first sizeChanged so we
             // attach at the real terminal dimensions, not the 800×600 default.
             streamCoord.pendingSessionID = sid
@@ -778,24 +800,44 @@ struct PaneWorkspaceTerminalView: View {
     #if os(macOS)
     @MainActor
     private func initPaneSession() async {
-        kLog("[KytosDebug][initPaneSession] start — terminalID=\(terminalID.uuidString.prefix(8)), paneSessionID=\(paneSessionID ?? "nil")")
-        if let existing = paneSessionID {
+        // Wait for reconciliation to finish clearing dead/duplicate session IDs
+        // before using any persisted paneSessionID.
+        await KytosAppModel.shared.waitForReconciliation()
+        // Read session ID from the canonical KytosAppModel (the @Binding may be
+        // stale after reconciliation replaced the entire layout tree).
+        let currentSessionID: String? = KytosAppModel.shared.windows.values
+            .lazy.compactMap { $0.session.layout.sessionID(for: terminalID) }
+            .first
+        kLog("[KytosDebug][initPaneSession] start — terminalID=\(terminalID.uuidString.prefix(8)), paneSessionID=\(currentSessionID ?? "nil")")
+        if let existing = currentSessionID {
             resolvedSessionID = existing
             paneInitDone = true
             kLog("[KytosDebug][initPaneSession] using existing session: \(existing)")
             return
         }
-        // Prevent duplicate session creation from SwiftUI re-renders.
-        guard KytosTerminalManager.shared.claimSessionCreation(for: terminalID) else {
-            kLog("[KytosDebug][initPaneSession] creation already in flight for \(terminalID.uuidString.prefix(8))")
-            // Another initPaneSession call is already creating a session for this terminal.
-            // Wait briefly and check if the layout was updated with a session ID.
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if case .terminal(_, _, let sid?) = layout {
-                resolvedSessionID = sid
+        // Prevent duplicate session creation — global lock ensures sequential creation.
+        if !KytosTerminalManager.shared.claimSessionCreation(for: terminalID) {
+            kLog("[KytosDebug][initPaneSession] creation in flight, waiting — \(terminalID.uuidString.prefix(8))")
+            var claimed = false
+            for _ in 0..<10 {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                if case .terminal(_, _, let sid?) = layout {
+                    resolvedSessionID = sid
+                    paneInitDone = true
+                    kLog("[KytosDebug][initPaneSession] picked up session \(sid) after wait — \(terminalID.uuidString.prefix(8))")
+                    return
+                }
+                if KytosTerminalManager.shared.claimSessionCreation(for: terminalID) {
+                    claimed = true
+                    kLog("[KytosDebug][initPaneSession] claimed after wait — \(terminalID.uuidString.prefix(8))")
+                    break
+                }
             }
-            paneInitDone = true
-            return
+            if !claimed {
+                kLog("[KytosDebug][initPaneSession] gave up waiting — \(terminalID.uuidString.prefix(8))")
+                paneInitDone = true
+                return
+            }
         }
         defer { KytosTerminalManager.shared.releaseSessionCreation(for: terminalID) }
 
@@ -867,28 +909,40 @@ struct PaneLayoutTreeView: View {
         case .terminal(let id, let commandLine, let sessionID):
             PaneWorkspaceTerminalView(terminalID: id, commandLine: commandLine, paneSessionID: sessionID, layout: $layout)
                 .id(id)  // Preserve @State across layout mutations (e.g. paneSessionID written back)
-        case .split(let axis, let left, let right):
+        case .split(let axis, _, _):
             if axis == .horizontal {
                 HStack(spacing: 0) {
                     PaneLayoutTreeView(layout: Binding(
-                        get: { left },
+                        get: {
+                            if case .split(_, let l, _) = layout { return l }
+                            return layout
+                        },
                         set: { updateLeft(to: $0) }
                     ))
                     Divider()
                     PaneLayoutTreeView(layout: Binding(
-                        get: { right },
+                        get: {
+                            if case .split(_, _, let r) = layout { return r }
+                            return layout
+                        },
                         set: { updateRight(to: $0) }
                     ))
                 }
             } else {
                 VStack(spacing: 0) {
                     PaneLayoutTreeView(layout: Binding(
-                        get: { left },
+                        get: {
+                            if case .split(_, let l, _) = layout { return l }
+                            return layout
+                        },
                         set: { updateLeft(to: $0) }
                     ))
                     Divider()
                     PaneLayoutTreeView(layout: Binding(
-                        get: { right },
+                        get: {
+                            if case .split(_, _, let r) = layout { return r }
+                            return layout
+                        },
                         set: { updateRight(to: $0) }
                     ))
                 }
