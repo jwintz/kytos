@@ -26,14 +26,21 @@ struct KytosFocusedSessionContext {
 @MainActor
 private func kytosFetchFocusedSession() async -> KytosFocusedSessionContext? {
     #if os(macOS)
-    let terminalID = KytosTerminalManager.shared.activeTerminalID
-                    ?? KytosTerminalManager.shared.lastKnownActiveTerminalID
-    guard let tid = terminalID else { return nil }
+    let active = KytosTerminalManager.shared.activeTerminalID
+    let latch = KytosTerminalManager.shared.lastKnownActiveTerminalID
+    let terminalID = active ?? latch
+    guard let tid = terminalID else {
+        kLog("[KytosDebug][ProcessInfo] no terminal ID (active=\(active?.uuidString.prefix(8) ?? "nil"), latch=\(latch?.uuidString.prefix(8) ?? "nil"))")
+        return nil
+    }
 
     let leaf = KytosAppModel.shared.windows.values
         .flatMap { $0.session.layout.allTerminalLeaves() }
         .first { $0.id == tid }
-    guard let sessionID = leaf?.sessionID else { return nil }
+    guard let sessionID = leaf?.sessionID else {
+        kLog("[KytosDebug][ProcessInfo] no session ID for terminal \(tid.uuidString.prefix(8)), leaf=\(leaf.map { String(describing: $0) } ?? "nil")")
+        return nil
+    }
 
     let result = await withCheckedContinuation { cont in
         DispatchQueue.global(qos: .background).async {
@@ -191,10 +198,17 @@ struct KytosProcessInfoView: View {
     #if os(macOS)
     @MainActor private func refresh() async {
         ctx = await kytosFetchFocusedSession()
-        guard let pid = ctx?.pid else { processes = []; return }
+        guard let pid = ctx?.pid else {
+            kLog("[KytosDebug][ProcessInfo] refresh — ctx=\(ctx == nil ? "nil" : "present"), pid=nil")
+            processes = []
+            return
+        }
+        kLog("[KytosDebug][ProcessInfo] refresh — pid=\(pid)")
         processes = await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .background).async {
-                cont.resume(returning: kytosProcessTree(rootPID: pid))
+                let tree = kytosProcessTree(rootPID: pid)
+                kLog("[KytosDebug][ProcessInfo] tree result — \(tree.count) entries")
+                cont.resume(returning: tree)
             }
         }
     }
@@ -211,9 +225,8 @@ private func kytosProcessTree(rootPID: pid_t) -> [ProcessEntry] {
     task.standardOutput = pipe
     task.standardError = Pipe()
     guard (try? task.run()) != nil else { return [] }
-    task.waitUntilExit()
-
     let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    task.waitUntilExit()
     var all: [pid_t: ProcessEntry] = [:]
     var children: [pid_t: [pid_t]] = [:]
 
@@ -232,6 +245,7 @@ private func kytosProcessTree(rootPID: pid_t) -> [ProcessEntry] {
 
     // DFS from rootPID
     var result: [ProcessEntry] = []
+    kLog("[KytosDebug][ProcessTree] rootPID=\(rootPID), all.count=\(all.count), rootInAll=\(all[rootPID] != nil)")
     func walk(_ pid: pid_t, depth: Int) {
         guard var entry = all[pid] else { return }
         entry.depth = depth
@@ -747,9 +761,9 @@ private func kytosReadResourceInfo(pid: pid_t) -> KytosResourcesUtilityView.Reso
     task.standardOutput = pipe
     task.standardError = Pipe()
     guard (try? task.run()) != nil else { return nil }
-    task.waitUntilExit()
     let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    task.waitUntilExit()
     let parts = out.split(separator: " ", omittingEmptySubsequences: true)
     guard parts.count >= 2 else { return nil }
 

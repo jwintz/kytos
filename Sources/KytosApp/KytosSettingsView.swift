@@ -57,6 +57,13 @@ private struct KytosTerminalSettingsTab: View {
                 }
 
                 Toggle("Cursor Blink", isOn: $settings.cursorBlink)
+
+                HStack {
+                    Text("Horizontal Margins")
+                    Slider(value: $settings.horizontalMargin, in: 0...32, step: 2)
+                    Text("\(Int(settings.horizontalMargin)) px")
+                        .frame(width: 40, alignment: .trailing)
+                }
             }
 
             Section("Shell") {

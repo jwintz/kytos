@@ -25,6 +25,12 @@ swift run --package-path .build/checkouts/XcodeGen xcodegen generate --spec proj
 
 `PaneLayoutTree` (`Models.swift`) is a binary tree where each leaf is a terminal session and each branch is a horizontal/vertical split. On macOS, each terminal leaf stores a `paneSessionID` referencing a live pane server session. On iPadOS, the PTY runs in-process with mksh.
 
+### One pane session per terminal pane
+
+Each leaf in the split tree maps to exactly one pane server session. A pane session is a single PTY process (e.g. a `/bin/zsh` instance) managed by the background server. When you split a terminal, Kytos creates a new pane session for the new pane. This is the expected model — unlike tmux where a "session" groups multiple windows and panes, a pane session is a 1:1 mapping to a single terminal.
+
+The navigator sidebar lists every leaf pane with its shell name (e.g. "zsh") and pane session ID. Multiple panes in the same tab are independent sessions running independent shell processes.
+
 ## Session lifecycle (macOS)
 
 | Event | Action |

@@ -218,6 +218,8 @@ enum KytosPaneError: Error {
 final class KytosPaneConnection {
     private var fd: Int32
     private var closed = false
+    /// Set to `true` to make `readExact` return nil on the next poll cycle.
+    var cancelled = false
 
     private static let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -233,6 +235,11 @@ final class KytosPaneConnection {
 
     init(fd: Int32) { self.fd = fd }
     deinit { if !closed { Darwin.close(fd) } }
+
+    /// Shut down the socket for reading and writing, waking any blocked read().
+    func shutdownSocket() {
+        Darwin.shutdown(fd, SHUT_RDWR)
+    }
 
     /// Send a JSON control message.
     func send(_ message: KytosPaneWireMessage) throws {
@@ -329,6 +336,16 @@ final class KytosPaneConnection {
         let success = buffer.withUnsafeMutableBytes { ptr -> Bool in
             guard let base = ptr.baseAddress else { return false }
             while offset < count {
+                if cancelled { return false }
+                // Poll with 500ms timeout so we can check `cancelled` periodically.
+                var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                let pr = Darwin.poll(&pfd, 1, 500)
+                if pr == 0 { continue } // timeout — recheck cancelled
+                if pr < 0 { return false }
+                if pfd.revents & Int16(POLLERR | POLLNVAL) != 0 { return false }
+                // POLLHUP can arrive WITH POLLIN when the server closes after writing.
+                // Only bail on POLLHUP if no data is available.
+                if pfd.revents & Int16(POLLHUP) != 0 && pfd.revents & Int16(POLLIN) == 0 { return false }
                 let n = Darwin.read(fd, base + offset, count - offset)
                 if n <= 0 { return false }
                 offset += n
@@ -502,20 +519,41 @@ final class KytosPaneClient {
             print("[KytosDebug][PaneClient] pane binary not found in app bundle")
             throw KytosPaneError.serverStartFailed
         }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: execPath)
-        process.arguments = ["--server", "--socket", socketPath]
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        // Override TERM so shells spawned by pane inherit xterm-256color, not dumb (Xcode's default).
+
+        // Launch the pane server in its own session (setsid) so Xcode's
+        // "stop" doesn't kill it along with the app's process group.
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
-        process.environment = env
-        try process.run()
-        print("[KytosDebug][PaneClient] Started pane server at \(execPath)")
+
+        var fileActions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&fileActions)
+        posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_addopen(&fileActions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0)
+        posix_spawn_file_actions_addopen(&fileActions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
+
+        var attr: posix_spawnattr_t?
+        posix_spawnattr_init(&attr)
+        // POSIX_SPAWN_SETSID puts the child in a new session (new process group leader).
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSID))
+
+        let args = [execPath, "--server", "--socket", socketPath]
+        let cArgs = args.map { strdup($0) } + [nil]
+        let cEnv = env.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer {
+            cArgs.forEach { $0.map { free($0) } }
+            cEnv.forEach { $0.map { free($0) } }
+            posix_spawn_file_actions_destroy(&fileActions)
+            posix_spawnattr_destroy(&attr)
+        }
+
+        var pid: pid_t = 0
+        let rc = posix_spawn(&pid, execPath, &fileActions, &attr, cArgs, cEnv)
+        guard rc == 0 else {
+            throw KytosPaneError.serverStartFailed
+        }
+        print("[KytosDebug][PaneClient] Started pane server at \(execPath) (pid \(pid), new session)")
     }
 }
 

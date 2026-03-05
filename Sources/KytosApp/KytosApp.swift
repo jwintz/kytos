@@ -565,6 +565,15 @@ class KytosTerminalManager {
     func recordFocus(id: UUID) {
         lastKnownActiveTerminalID = id
     }
+
+    /// Close all streaming connections to break blocking reads during app quit.
+    func disconnectAll() {
+        for (_, managed) in terminals {
+            if let streaming = managed.coordinator as? KytosPaneStreamingCoordinator {
+                streaming.disconnect()
+            }
+        }
+    }
     
     func getOrCreateTerminal(id: UUID, colorScheme: ColorScheme, commandLine: [String]? = nil, paneSessionID: String? = nil) -> ManagedTerminal {
         if let existing = terminals[id] {
@@ -730,6 +739,7 @@ struct PaneWorkspaceTerminalView: View {
                     colorScheme: colorScheme,
                     settings: settings
                 )
+                .padding(.horizontal, settings.horizontalMargin)
                 .background(Color.clear)
                 .focusable()
                 .focused($isFocused)
@@ -865,9 +875,9 @@ struct PaneWorkspaceTerminalView: View {
         if let sid = newSessionID {
             resolvedSessionID = sid
             kLog("[KytosDebug][initPaneSession] created session: \(sid)")
-            // Persist the session ID back into the layout tree.
+            // Persist the session ID (and command line if it was nil) back into the layout tree.
             if case .terminal(let id, let cmd, nil) = layout {
-                layout = .terminal(id: id, commandLine: cmd, paneSessionID: sid)
+                layout = .terminal(id: id, commandLine: cmd ?? cmdLine, paneSessionID: sid)
                 KytosAppModel.shared.save()
             }
         }
@@ -1048,10 +1058,8 @@ func kLog(_ msg: String) {
 struct KytosApp: App {
     @Environment(\.kelyphosKeybindingRegistry) private var registry
     @State private var appModel = KytosAppModel.shared
-    @State private var shellState: KelyphosShellState = {
+    @State private var settingsShellState: KelyphosShellState = {
         let state = KelyphosShellState(persistencePrefix: "me.jwintz.kytos")
-        state.navigatorVisible = false
-        state.utilityAreaVisible = false
         return state
     }()
     @Environment(\.openWindow) private var openWindow
@@ -1092,8 +1100,16 @@ struct KytosApp: App {
             object: nil,
             queue: .main
         ) { _ in
-            kLog("[KytosDebug][App] willTerminate — saving state")
+            kLog("[KytosDebug][App] willTerminate — disconnecting streams and saving state")
+            KytosTerminalManager.shared.disconnectAll()
             KytosAppModel.shared.save()
+        }
+
+        // SIGTERM handler — willTerminateNotification doesn't fire for signals
+        signal(SIGTERM) { _ in
+            KytosTerminalManager.shared.disconnectAll()
+            KytosAppModel.shared.save()
+            _exit(0)
         }
         #endif
     }
@@ -1106,7 +1122,7 @@ struct KytosApp: App {
                 KelyphosCommands()
             }
         Settings {
-            KytosSettingsWindowView(shellState: shellState)
+            KytosSettingsWindowView(shellState: settingsShellState)
         }
         #else
         mainWindowGroup
@@ -1119,14 +1135,14 @@ struct KytosApp: App {
     private var mainWindowGroup: some Scene {
         #if os(macOS)
         WindowGroup("Kytos", id: "main", for: UUID.self) { $windowID in
-            KytosWindowView(windowID: $windowID, appModel: appModel, shellState: shellState)
+            KytosWindowView(windowID: $windowID, appModel: appModel)
         }
         #else
         WindowGroup("Kytos") {
             let workspace = appModel.workspace(for: UUID())
             
             KelyphosShellView(
-                state: shellState,
+                state: settingsShellState,
                 configuration: KelyphosShellConfiguration(
                     navigatorTabs: KytosNavigatorTab.allCases,
                     inspectorTabs: KytosInspectorTab.allCases,
@@ -1150,16 +1166,19 @@ struct KytosWindowView: View {
     @State private var workspace: KytosWorkspace?
     @Environment(\.openWindow) private var openWindow
     @Environment(\.kelyphosKeybindingRegistry) private var registry
+    @State private var shellState: KelyphosShellState
 
     var appModel: KytosAppModel
-    var shellState: KelyphosShellState
 
-    init(windowID: Binding<UUID?>, appModel: KytosAppModel, shellState: KelyphosShellState) {
+    init(windowID: Binding<UUID?>, appModel: KytosAppModel) {
         self._windowID = windowID
         let resolvedID = windowID.wrappedValue ?? UUID()
         self._stableID = State(initialValue: resolvedID)
         self.appModel = appModel
-        self.shellState = shellState
+        let state = KelyphosShellState(persistencePrefix: "me.jwintz.kytos.\(resolvedID.uuidString.prefix(8))")
+        state.navigatorVisible = false
+        state.utilityAreaVisible = false
+        self._shellState = State(initialValue: state)
         kLog("[KytosDebug][WindowView] init — windowID=\(windowID.wrappedValue?.uuidString.prefix(8) ?? "nil"), stableID=\(resolvedID.uuidString.prefix(8))")
     }
 

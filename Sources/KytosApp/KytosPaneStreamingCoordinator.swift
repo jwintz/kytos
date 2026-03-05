@@ -184,6 +184,18 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
         self.readLoop(conn: conn, tv: tv)
     }
 
+    // MARK: - Disconnect
+
+    /// Close the streaming connection, breaking the blocking readLoop.
+    func disconnect() {
+        if let conn = connection {
+            conn.cancelled = true       // Tell poll-based readExact to exit
+            conn.shutdownSocket()       // Wake any blocked poll/read
+            conn.close()
+        }
+        connection = nil
+    }
+
     // MARK: - Read Loop
 
     private func readLoop(conn: KytosPaneConnection, tv: TerminalView) {
