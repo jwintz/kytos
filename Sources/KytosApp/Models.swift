@@ -131,7 +131,13 @@ public enum PaneLayoutTree: Codable, Hashable {
         }
     }
 
-    /// Returns all paneSessionIDs present in leaf nodes (non-nil only).
+    /// Returns the UUID of the first terminal leaf found (depth-first left).
+    func firstLeafID() -> UUID? {
+        switch self {
+        case .terminal(let id, _, _): return id
+        case .split(_, let left, _): return left.firstLeafID()
+        }
+    }
     func allPaneSessionIDs() -> [String] {
         switch self {
         case .terminal(_, _, let sid):
@@ -142,10 +148,10 @@ public enum PaneLayoutTree: Codable, Hashable {
     }
 
     /// Returns all (terminalID, paneSessionID?) leaf pairs.
-    func allTerminalLeaves() -> [(id: UUID, sessionID: String?)] {
+    func allTerminalLeaves() -> [(id: UUID, commandLine: [String]?, sessionID: String?)] {
         switch self {
-        case .terminal(let id, _, let sid):
-            return [(id: id, sessionID: sid)]
+        case .terminal(let id, let commandLine, let sid):
+            return [(id: id, commandLine: commandLine, sessionID: sid)]
         case .split(_, let left, let right):
             return left.allTerminalLeaves() + right.allTerminalLeaves()
         }
@@ -164,6 +170,28 @@ public enum PaneLayoutTree: Codable, Hashable {
                 axis: axis,
                 left: left.clearingDeadSessions(liveSessions),
                 right: right.clearingDeadSessions(liveSessions)
+            )
+        }
+    }
+
+    /// Clears duplicate paneSessionIDs: if a session ID has already been seen,
+    /// the leaf's ID is cleared so a fresh session is created.
+    func deduplicatingSessions(_ seen: inout Set<String>) -> PaneLayoutTree {
+        switch self {
+        case .terminal(let id, let commandLine, let sessionID):
+            if let sid = sessionID {
+                if seen.contains(sid) {
+                    kLog("[KytosDebug][AppModel] dedup — clearing duplicate session \(sid) from terminal \(id.uuidString.prefix(8))")
+                    return .terminal(id: id, commandLine: commandLine, paneSessionID: nil)
+                }
+                seen.insert(sid)
+            }
+            return self
+        case .split(let axis, let left, let right):
+            return .split(
+                axis: axis,
+                left: left.deduplicatingSessions(&seen),
+                right: right.deduplicatingSessions(&seen)
             )
         }
     }
@@ -244,11 +272,11 @@ public final class KytosAppModel {
             claimedWindowIDs.insert(windowID)
             return existing
         }
-        print("[KytosDebug][AppModel] workspace(for: \(windowID.uuidString.prefix(8))) — no exact match, existing=\(windows.count), claimed=\(claimedWindowIDs.count)")
+        kLog("[KytosDebug][AppModel] workspace(for: \(windowID.uuidString.prefix(8))) — no exact match, existing=\(windows.count), claimed=\(claimedWindowIDs.count)")
         // Find the first unclaimed workspace from a previous session to remap
         let unclaimed = windows.filter { !claimedWindowIDs.contains($0.key) }
         if let (oldKey, existing) = unclaimed.first {
-            print("[KytosDebug][AppModel]   → remapping \(oldKey.uuidString.prefix(8)) → \(windowID.uuidString.prefix(8)), session=\(existing.session.name)")
+            kLog("[KytosDebug][AppModel]   → remapping \(oldKey.uuidString.prefix(8)) → \(windowID.uuidString.prefix(8)), session=\(existing.session.name)")
             // Batch remove+insert to trigger didSet only once
             var updated = windows
             updated.removeValue(forKey: oldKey)
@@ -257,7 +285,7 @@ public final class KytosAppModel {
             claimedWindowIDs.insert(windowID)
             return existing
         }
-        print("[KytosDebug][AppModel]   → creating default workspace")
+        kLog("[KytosDebug][AppModel]   → creating default workspace")
         let newWorkspace = KytosWorkspace.defaultWorkspace()
         windows[windowID] = newWorkspace
         claimedWindowIDs.insert(windowID)
@@ -273,7 +301,7 @@ public final class KytosAppModel {
     public func pruneOrphanedWorkspaces() {
         let orphanedKeys = windows.keys.filter { !claimedWindowIDs.contains($0) }
         guard !orphanedKeys.isEmpty else { return }
-        print("[KytosDebug][AppModel] Pruning \(orphanedKeys.count) orphaned workspace(s), keeping \(claimedWindowIDs.count)")
+        kLog("[KytosDebug][AppModel] Pruning \(orphanedKeys.count) orphaned workspace(s), keeping \(claimedWindowIDs.count)")
         // Batch: build new dict to trigger didSet only once
         var pruned = windows
         for key in orphanedKeys {
@@ -286,9 +314,9 @@ public final class KytosAppModel {
         do {
             let data = try JSONEncoder().encode(windows)
             UserDefaults.standard.set(data, forKey: "KytosAppModel_Windows_v5")
-            print("[KytosDebug][AppModel] save() — \(windows.count) window(s), \(data.count) bytes")
+            kLog("[KytosDebug][AppModel] save() — \(windows.count) window(s), \(data.count) bytes")
         } catch {
-            print("[KytosDebug][AppModel] save() FAILED: \(error)")
+            kLog("[KytosDebug][AppModel] save() FAILED: \(error)")
         }
         saveTabGroups()
     }
@@ -311,7 +339,7 @@ public final class KytosAppModel {
         }
         if let data = try? JSONEncoder().encode(groups) {
             UserDefaults.standard.set(data, forKey: "KytosAppModel_TabGroups_v1")
-            print("[KytosDebug][AppModel] saveTabGroups() — \(groups.count) group(s)")
+            kLog("[KytosDebug][AppModel] saveTabGroups() — \(groups.count) group(s)")
         }
         #endif
     }
@@ -324,23 +352,27 @@ public final class KytosAppModel {
     }
 
     private func load() {
-        print("[KytosDebug][AppModel] load()")
+        kLog("[KytosDebug][AppModel] load()")
         guard let data = UserDefaults.standard.data(forKey: "KytosAppModel_Windows_v5") else {
-            print("[KytosDebug][AppModel] load() — no saved data")
+            kLog("[KytosDebug][AppModel] load() — no saved data")
             return
         }
         do {
             let decoded = try JSONDecoder().decode([UUID: KytosWorkspace].self, from: data)
-            print("[KytosDebug][AppModel] load() — \(data.count) bytes → \(decoded.count) workspace(s)")
+            kLog("[KytosDebug][AppModel] load() — \(data.count) bytes → \(decoded.count) workspace(s)")
             for (key, ws) in decoded {
-                print("[KytosDebug][AppModel]   window \(key.uuidString.prefix(8)): session=\(ws.session.name)")
+                kLog("[KytosDebug][AppModel]   window \(key.uuidString.prefix(8)): session=\(ws.session.name)")
             }
             self.windows = decoded
         } catch {
-            print("[KytosDebug][AppModel] load() DECODE FAILED: \(error)")
+            kLog("[KytosDebug][AppModel] load() DECODE FAILED: \(error)")
         }
         #if os(macOS)
-        reconcileSessionsOnLaunch()
+        // Reconcile on a background thread to avoid blocking the main thread with
+        // socket I/O during app launch (server startup can take up to 2.5s).
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            reconcileSessionsOnLaunch()
+        }
         #endif
     }
 
@@ -348,19 +380,45 @@ public final class KytosAppModel {
     /// Cross-references persisted paneSessionIDs with the live pane server.
     /// Sessions that no longer exist (server restarted or timed out) have their IDs cleared
     /// so they'll be recreated fresh when the terminal view appears.
+    /// Called on a background thread; mutations dispatched back to main.
     private func reconcileSessionsOnLaunch() {
+        // Collect all persisted session IDs to see if we even need the server.
+        let allPersistedIDs = windows.values.flatMap {
+            $0.session.layout.allPaneSessionIDs()
+        }
+        guard !allPersistedIDs.isEmpty else {
+            kLog("[KytosDebug][AppModel] reconcile — no persisted session IDs, skipping")
+            return
+        }
+
         let liveSessions: Set<String>
         do {
+            // First try: server may already be running from the previous app session.
             let list = try KytosPaneClient.shared.listSessions()
             liveSessions = Set(list.filter { $0.isRunning }.map { $0.id })
-            print("[KytosDebug][AppModel] reconcile — \(liveSessions.count) live pane session(s)")
+            kLog("[KytosDebug][AppModel] reconcile — \(liveSessions.count) live pane session(s)")
         } catch {
-            // Server not running — all session IDs are stale
-            liveSessions = []
-            print("[KytosDebug][AppModel] reconcile — pane server unreachable, clearing all sessionIDs: \(error)")
+            // Server not running yet — start it and retry once.
+            kLog("[KytosDebug][AppModel] reconcile — server not reachable (\(error)), starting and retrying")
+            do {
+                let list = try KytosPaneClient.shared.listSessionsWithStart()
+                liveSessions = Set(list.filter { $0.isRunning }.map { $0.id })
+                kLog("[KytosDebug][AppModel] reconcile (retry) — \(liveSessions.count) live pane session(s)")
+            } catch {
+                // Truly unreachable — clear stale IDs.
+                liveSessions = []
+                kLog("[KytosDebug][AppModel] reconcile — pane server unreachable after retry, clearing all sessionIDs: \(error)")
+            }
         }
-        for workspace in windows.values {
-            workspace.session.layout = workspace.session.layout.clearingDeadSessions(liveSessions)
+        DispatchQueue.main.async { [self] in
+            // Deduplicate: if multiple leaves reference the same session ID, keep only
+            // the first and clear the rest so they create fresh sessions.
+            var seenSessionIDs = Set<String>()
+            for workspace in windows.values {
+                workspace.session.layout = workspace.session.layout
+                    .clearingDeadSessions(liveSessions)
+                    .deduplicatingSessions(&seenSessionIDs)
+            }
         }
     }
     #endif

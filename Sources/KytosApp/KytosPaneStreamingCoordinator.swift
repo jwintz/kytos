@@ -8,44 +8,115 @@ import SwiftTerm
 /// type refactor. The inherited `process` is never started.
 final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator {
 
-    private var connection: KytosPaneConnection?
-    private let readQueue = DispatchQueue(label: "kytos.pane.stream", qos: .userInitiated)
+    /// Set before the view is laid out. The stream starts on the first `sizeChanged`
+    /// call (real terminal dimensions), not at construction time (80×25 default).
+    var pendingSessionID: String?
+
+    private let lock = NSLock()
+    private var _connection: KytosPaneConnection?
+    private var connection: KytosPaneConnection? {
+        get { lock.withLock { _connection } }
+        set { lock.withLock { _connection = newValue } }
+    }
+    private let readQueue = DispatchQueue(label: "kytos.pane.stream.read", qos: .userInitiated)
+    private let writeQueue = DispatchQueue(label: "kytos.pane.stream.write", qos: .userInteractive)
 
     // MARK: - Start
 
-    /// Starts streaming from the given pane session ID.
-    /// Call instead of `start(commandLine:)`.
-    func startStream(sessionID: String) {
-        guard let tv = terminalView else { return }
-        let cols = tv.terminal.cols > 0 ? tv.terminal.cols : 80
-        let rows = tv.terminal.rows > 0 ? tv.terminal.rows : 24
+    /// Starts streaming from the given pane session ID at the specified dimensions.
+    /// Called from `sizeChanged` on the first layout, ensuring we use real terminal size.
+    func startStream(sessionID: String, cols: Int, rows: Int) {
+        guard let tv = terminalView else {
+            kLog("[KytosDebug][PaneStream] startStream — no terminalView!")
+            return
+        }
+        kLog("[KytosDebug][PaneStream] startStream session=\(sessionID) cols=\(cols) rows=\(rows)")
 
         readQueue.async { [weak self] in
             guard let self else { return }
-            do {
-                let conn = try KytosPaneClient.shared.openAttachConnection(
-                    sessionID: sessionID, cols: cols, rows: rows)
 
-                // Read attach response
-                guard case .response(let resp)? = try conn.readFullMessage(), resp.ok else {
-                    print("[KytosDebug][PaneStream] Attach response not ok for session \(sessionID)")
-                    return
+            // Retry with backoff — the pane server may still be starting
+            // (reconciliation runs asynchronously off the main thread).
+            var conn: KytosPaneConnection?
+            for attempt in 0..<10 {
+                do {
+                    conn = try KytosPaneClient.shared.openAttachConnection(
+                        sessionID: sessionID, cols: cols, rows: rows)
+                    kLog("[KytosDebug][PaneStream] attach connected on attempt \(attempt)")
+                    break
+                } catch {
+                    if attempt < 9 {
+                        let delay = UInt32(100_000 * min(attempt + 1, 5)) // 100ms–500ms
+                        usleep(delay)
+                    } else {
+                        kLog("[KytosDebug][PaneStream] Failed to attach to \(sessionID) after 10 attempts: \(error)")
+                        return
+                    }
                 }
-                // Read initial snapshot
-                guard case .snapshot(let snap)? = try conn.readFullMessage() else {
-                    print("[KytosDebug][PaneStream] No snapshot received for session \(sessionID)")
+            }
+            guard let conn else { return }
+
+            do {
+                // The server subscribes us then resizes then sends response then snapshot.
+                // The resize triggers SIGWINCH → shell redraws → deltas can arrive at
+                // ANY point: before the response, between response and snapshot, or after.
+                // Read messages in a loop, collecting deltas until we have both response + snapshot.
+                var response: KytosPaneResponse?
+                var snapshot: KytosPaneTerminalSnapshot?
+                var earlyDeltas: [[UInt8]] = []
+
+                for i in 0..<50 {
+                    guard let msg = try conn.readFullMessage() else {
+                        kLog("[KytosDebug][PaneStream] readFullMessage returned nil at iteration \(i)")
+                        break
+                    }
+                    switch msg {
+                    case .response(let resp):
+                        response = resp
+                        kLog("[KytosDebug][PaneStream] got response ok=\(resp.ok) msg=\(resp.message ?? "")")
+                        if !resp.ok {
+                            return
+                        }
+                    case .snapshot(let snap):
+                        snapshot = snap
+                        kLog("[KytosDebug][PaneStream] got snapshot \(snap.cols)x\(snap.rows), \(snap.lines.count) lines")
+                    case .delta(let delta):
+                        earlyDeltas.append(delta.toANSIBytes())
+                        kLog("[KytosDebug][PaneStream] got early delta")
+                    case .other:
+                        kLog("[KytosDebug][PaneStream] got .other message")
+                        break
+                    }
+                    if response != nil && snapshot != nil { break }
+                }
+
+                guard let snap = snapshot else {
+                    kLog("[KytosDebug][PaneStream] No snapshot received for session \(sessionID) (response=\(response != nil))")
                     return
                 }
                 self.connection = conn
 
                 let bytes = snap.toANSIBytes()
+                kLog("[KytosDebug][PaneStream] Feeding snapshot \(snap.cols)x\(snap.rows) (\(bytes.count) bytes, \(snap.lines.count) lines) to terminal")
                 DispatchQueue.main.async {
                     tv.feed(byteArray: bytes[...])
+                    for delta in earlyDeltas {
+                        tv.feed(byteArray: delta[...])
+                    }
                 }
-                print("[KytosDebug][PaneStream] Attached to \(sessionID), snapshot \(snap.cols)x\(snap.rows)")
+
+                // Force a SIGWINCH so the shell redraws. The snapshot's toANSIBytes()
+                // can produce output that SwiftTerm doesn't visually render correctly;
+                // a shell-driven redraw via SIGWINCH always works because it's raw PTY
+                // output. Toggle the size to guarantee the signal even when cols/rows
+                // haven't changed since the last attach.
+                try? conn.sendBinaryResize(cols: max(cols - 1, 1), rows: rows)
+                usleep(50_000) // 50ms for the shell to notice
+                try? conn.sendBinaryResize(cols: cols, rows: rows)
+
                 self.readLoop(conn: conn, tv: tv)
             } catch {
-                print("[KytosDebug][PaneStream] Failed to attach to \(sessionID): \(error)")
+                kLog("[KytosDebug][PaneStream] Stream setup error for \(sessionID): \(error)")
             }
         }
     }
@@ -62,28 +133,48 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
                 }
             }
         }
-        print("[KytosDebug][PaneStream] Stream ended for terminal \(terminalID?.uuidString.prefix(8) ?? "?")")
+        kLog("[KytosDebug][PaneStream] Stream ended for terminal \(terminalID?.uuidString.prefix(8) ?? "?")")
+        connection = nil
         if let id = terminalID {
             DispatchQueue.main.async {
                 KytosTerminalManager.shared.removeTerminal(id: id)
             }
         }
-        connection = nil
     }
 
     // MARK: - TerminalViewDelegate overrides
 
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         guard let conn = connection else { return }
-        try? conn.sendBinaryInput(Data(data))
+        let inputData = Data(data)
+        writeQueue.async {
+            try? conn.sendBinaryInput(inputData)
+        }
     }
 
     override func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        guard let conn = connection, newCols > 0, newRows > 0,
+        guard newCols > 0, newRows > 0 else { return }
+
+        // If we haven't connected yet and have a pending session, this first
+        // sizeChanged gives us the real terminal dimensions — start the stream now.
+        if connection == nil, let sid = pendingSessionID {
+            pendingSessionID = nil
+            lastCols = newCols
+            lastRows = newRows
+            kLog("[KytosDebug][PaneStream] sizeChanged triggering startStream for pending session \(sid), \(newCols)x\(newRows)")
+            startStream(sessionID: sid, cols: newCols, rows: newRows)
+            return
+        }
+
+        guard connection != nil,
               newCols != lastCols || newRows != lastRows else { return }
         lastCols = newCols
         lastRows = newRows
-        try? conn.sendBinaryResize(cols: newCols, rows: newRows)
+        // Dispatch socket write off the main thread to prevent UI freezes.
+        let conn = connection
+        writeQueue.async {
+            try? conn?.sendBinaryResize(cols: newCols, rows: newRows)
+        }
     }
 
     override func processTerminated(_ source: SwiftTerm.LocalProcess, exitCode: Int32?) {

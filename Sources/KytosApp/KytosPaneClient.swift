@@ -371,7 +371,10 @@ final class KytosPaneClient {
             atPath: dir, withIntermediateDirectories: true,
             attributes: [.posixPermissions: NSNumber(value: Int16(bitPattern: 0o700))]
         )
-        return "\(dir)/default"
+        // Fixed socket name — sessions persist across app relaunches.
+        // The TERM=dumb issue is handled by patches, so mtime-based versioning
+        // is no longer needed and was preventing session restoration.
+        return "\(dir)/kytos"
     }
 
     private var paneExecutablePath: String? {
@@ -401,6 +404,13 @@ final class KytosPaneClient {
         return response.sessions ?? []
     }
 
+    /// Like `listSessions()` but starts the server if needed.
+    func listSessionsWithStart() throws -> [KytosPaneSessionInfo] {
+        let req = KytosPaneRequest(command: .listSessions)
+        let response = try sendControl(req, allowStart: true)
+        return response.sessions ?? []
+    }
+
     func destroySession(id: String) throws {
         let req = KytosPaneRequest(command: .destroySession, sessionID: id)
         _ = try sendControl(req, allowStart: false)
@@ -413,6 +423,19 @@ final class KytosPaneClient {
         let req = KytosPaneRequest(command: .attachSession, sessionID: sessionID, cols: cols, rows: rows)
         try connection.send(.request(req))
         return connection
+    }
+
+    /// Fetches a one-shot snapshot of a session's current screen contents.
+    func fetchSnapshot(sessionID: String) throws -> KytosPaneTerminalSnapshot {
+        let conn = try openAttachConnection(sessionID: sessionID, cols: 220, rows: 50)
+        defer { conn.close() }
+        guard case .response(let resp)? = try conn.readFullMessage(), resp.ok else {
+            throw KytosPaneError.invalidResponse
+        }
+        guard case .snapshot(let snap)? = try conn.readFullMessage() else {
+            throw KytosPaneError.invalidResponse
+        }
+        return snap
     }
 
     // MARK: - Private
@@ -476,7 +499,7 @@ final class KytosPaneClient {
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: execPath)
-        process.arguments = ["--server"]
+        process.arguments = ["--server", "--socket", socketPath]
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

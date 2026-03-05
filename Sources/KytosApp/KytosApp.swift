@@ -23,111 +23,27 @@ enum KytosNavigatorTab: String, KelyphosPanel {
 
 enum KytosInspectorTab: String, CaseIterable, KelyphosPanel {
     case process = "Process Info"
-    case settings = "Settings"
-    
+
     var id: String { rawValue }
     var title: String { rawValue }
     var systemImage: String {
         switch self {
         case .process: return "info.circle"
-        case .settings: return "gear"
         }
     }
-    
+
     var body: some View {
         switch self {
         case .process:
+            #if os(macOS)
             KytosProcessInfoView()
-        case .settings:
-            KytosSettingsView()
+            #else
+            EmptyView()
+            #endif
         }
     }
 }
 
-/// Inspector view showing the focused pane's session details.
-/// Polls at 0.5s since @FocusedValue doesn't propagate through AnyView in Kelyphos panels.
-struct KytosProcessInfoView: View {
-    @State private var sessionInfo: KytosPaneSessionInfo?
-    @State private var focusedTerminalID: UUID?
-    @State private var focusedSessionID: String?
-
-    var body: some View {
-        Group {
-            if let info = sessionInfo {
-                Form {
-                    Section("Session") {
-                        LabeledContent("ID", value: info.id)
-                        LabeledContent("Name", value: info.name ?? "—")
-                        HStack {
-                            Circle()
-                                .fill(info.isRunning ? Color.green : Color.secondary.opacity(0.5))
-                                .frame(width: 8, height: 8)
-                            Text(info.isRunning ? "Running" : "Stopped")
-                                .foregroundStyle(info.isRunning ? .primary : .secondary)
-                        }
-                    }
-                    if let pid = info.processID {
-                        Section("Process") {
-                            LabeledContent("PID", value: "\(pid)")
-                        }
-                    }
-                    #if os(macOS)
-                    Section {
-                        Button("Kill Session", role: .destructive) {
-                            DispatchQueue.global(qos: .background).async {
-                                try? KytosPaneClient.shared.destroySession(id: info.id)
-                                Task { @MainActor in await refresh() }
-                            }
-                        }
-                    }
-                    #endif
-                }
-                .formStyle(.grouped)
-            } else {
-                VStack(spacing: 8) {
-                    Image(systemName: "terminal")
-                        .font(.largeTitle)
-                        .foregroundStyle(.tertiary)
-                    Text(focusedTerminalID == nil ? "No active pane" : "No pane session")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        #if os(macOS)
-        .task { await refresh() }
-        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
-            Task { await refresh() }
-        }
-        #endif
-    }
-
-    #if os(macOS)
-    @MainActor
-    private func refresh() async {
-        focusedTerminalID = KytosTerminalManager.shared.activeTerminalID
-        // Find the pane session ID for the focused terminal by looking through all workspaces
-        let sessionID = KytosAppModel.shared.windows.values
-            .flatMap { $0.session.layout.allTerminalLeaves() }
-            .first { $0.id == focusedTerminalID }?
-            .sessionID
-        focusedSessionID = sessionID
-        guard let sid = sessionID else {
-            sessionInfo = nil
-            return
-        }
-        let result = await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .background).async {
-                cont.resume(returning: Result { try KytosPaneClient.shared.listSessions() })
-            }
-        }
-        if case .success(let sessions) = result {
-            sessionInfo = sessions.first { $0.id == sid }
-        }
-    }
-    #endif
-}
 
 struct KytosFocusedWindowIDKey: FocusedValueKey {
     typealias Value = UUID
@@ -139,28 +55,22 @@ extension FocusedValues {
     }
 }
 
-enum KytosUtilityTab: String, KelyphosPanel {
-    case logs = "System Logs"
-    
-    var id: String { rawValue }
-    var title: String { rawValue }
-    var systemImage: String { "list.bullet.rectangle" }
-    
-    var body: some View {
-        Text("Kytos Logging Ready")
-            .foregroundColor(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
+enum KytosUtilityTab: CaseIterable, KelyphosPanel {
+    var id: String { "" }
+    var title: String { "" }
+    var systemImage: String { "" }
+    var body: some View { EmptyView() }
 }
 
 struct KytosSessionsSidebar: View {
     @Environment(KytosWorkspace.self) private var workspace
-    @State private var liveSessions: [String: KytosPaneSessionInfo] = [:]  // keyed by session ID
-    @State private var trackedFocusedID: UUID?  // polled at 0.3s; @FocusedValue can't cross AnyView in Kelyphos panels
+    #if os(macOS)
+    @State private var liveSessions: [String: KytosPaneSessionInfo] = [:]
+    #endif
+    @State private var trackedFocusedID: UUID?
 
     var body: some View {
         @Bindable var workspaceBindable = workspace
-        let leaves = workspaceBindable.session.layout.allTerminalLeaves()
 
         List {
             Section(header: Text("Session")) {
@@ -172,6 +82,7 @@ struct KytosSessionsSidebar: View {
             }
 
             #if os(macOS)
+            let leaves = workspaceBindable.session.layout.allTerminalLeaves()
             Section(header: Text("Panes")) {
                 if leaves.isEmpty {
                     Text("No panes")
@@ -181,6 +92,7 @@ struct KytosSessionsSidebar: View {
                     ForEach(leaves, id: \.id) { leaf in
                         PaneLeafRow(
                             terminalID: leaf.id,
+                            commandLine: leaf.commandLine,
                             sessionInfo: leaf.sessionID.flatMap { liveSessions[$0] },
                             isFocused: leaf.id == trackedFocusedID,
                             onFocus: {
@@ -244,10 +156,18 @@ struct KytosSessionsSidebar: View {
 #if os(macOS)
 private struct PaneLeafRow: View {
     let terminalID: UUID
+    let commandLine: [String]?
     let sessionInfo: KytosPaneSessionInfo?
     let isFocused: Bool
     let onFocus: () -> Void
     let onKill: (() -> Void)?
+    @State private var isHovered = false
+
+    /// Human-readable label: last path component of the shell (e.g. "zsh"), falling back to "Shell"
+    private var commandLabel: String {
+        guard let cmd = commandLine?.first, !cmd.isEmpty else { return "Shell" }
+        return URL(fileURLWithPath: cmd).lastPathComponent
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -255,16 +175,16 @@ private struct PaneLeafRow: View {
                 .fill(sessionInfo?.isRunning == true ? Color.green : Color.secondary.opacity(0.5))
                 .frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 1) {
-                Text(sessionInfo?.name ?? "Pane")
+                Text(commandLabel)
                     .font(.system(size: 12))
                     .fontWeight(isFocused ? .semibold : .regular)
                     .lineLimit(1)
                 if let sid = sessionInfo?.id {
-                    Text("Session \(sid)")
+                    Text("pane session \(sid)")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("No session")
+                    Text("connecting…")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                 }
@@ -282,11 +202,18 @@ private struct PaneLeafRow: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .opacity(isHovered ? 1 : 0)
                 .help("Kill session")
             }
         }
         .padding(.vertical, 2)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(isHovered ? Color.secondary.opacity(0.12) : Color.clear)
+        )
         .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
         .onTapGesture(perform: onFocus)
     }
 }
@@ -388,7 +315,7 @@ class MacOSLocalProcessTerminalCoordinator: NSObject, TerminalViewDelegate, Loca
     
     // MARK: - LocalProcessDelegate Requirements
     func processTerminated(_ source: SwiftTerm.LocalProcess, exitCode: Int32?) {
-        print("[KytosDebug] Shell Terminated with code: \(String(describing: exitCode))")
+        kLog("[KytosDebug] Shell Terminated with code: \(String(describing: exitCode))")
         if let id = terminalID {
             KytosTerminalManager.shared.removeTerminal(id: id)
         }
@@ -410,7 +337,7 @@ class MacOSLocalProcessTerminalCoordinator: NSObject, TerminalViewDelegate, Loca
         guard newCols > 0, newRows > 0, newCols != lastCols || newRows != lastRows else { return }
         lastCols = newCols
         lastRows = newRows
-        print("[KytosDebug] TerminalView sizeChanged: cols=\(newCols), rows=\(newRows)")
+        kLog("[KytosDebug] TerminalView sizeChanged: cols=\(newCols), rows=\(newRows)")
         guard process.running else { return }
         var size = getWindowSize()
         let _ = PseudoTerminalHelpers.setWinSize(masterPtyDescriptor: process.childfd, windowSize: &size)
@@ -463,14 +390,14 @@ class MacOSLocalProcessTerminalCoordinator: NSObject, TerminalViewDelegate, Loca
             environment["ENV"] = rcPath
         }
 
-        print("[KytosDebug] Starting shell: \(shell)")
+        kLog("[KytosDebug] Starting shell: \(shell)")
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
         environment["LANG"] = environment["LANG"] ?? "en_US.UTF-8"
         environment["SHELL"] = shell
         let envArray = environment.map { "\($0.key)=\($0.value)" }
         process.startProcess(executable: shell, args: args, environment: envArray)
-        print("[KytosDebug] Shell launched calling startProcess")
+        kLog("[KytosDebug] Shell launched calling startProcess")
     }
 }
 #else
@@ -563,6 +490,17 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
 
 class KytosTerminalManager {
     static let shared = KytosTerminalManager()
+
+    init() {
+        #if os(macOS)
+        // Poll at 0.1s to latch whichever TerminalView is currently first responder,
+        // covering the case where the user clicks directly on a terminal (AppKit
+        // calls makeFirstResponder internally without going through KytosRequestFocus).
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            _ = self?.activeTerminalID  // side-effect: updates lastKnownActiveTerminalID
+        }
+        #endif
+    }
     
     struct ManagedTerminal {
         let view: TerminalView
@@ -570,20 +508,55 @@ class KytosTerminalManager {
     }
     
     private var terminals: [UUID: ManagedTerminal] = [:]
-    
+
+    /// Guards against multiple concurrent session creations for the same terminal UUID.
+    /// When SwiftUI re-renders, multiple `initPaneSession()` calls can fire before any completes;
+    /// only the first should create a session.
+    private var sessionCreationInFlight: Set<UUID> = []
+    private let creationLock = NSLock()
+
+    /// Attempts to claim the right to create a pane session for the given terminal UUID.
+    /// Returns `true` if the caller should proceed; `false` if another call is already in flight.
+    func claimSessionCreation(for id: UUID) -> Bool {
+        creationLock.lock()
+        defer { creationLock.unlock() }
+        return sessionCreationInFlight.insert(id).inserted
+    }
+
+    /// Releases the creation claim after the session has been created (or failed).
+    func releaseSessionCreation(for id: UUID) {
+        creationLock.lock()
+        defer { creationLock.unlock() }
+        sessionCreationInFlight.remove(id)
+    }
+
+    /// The last terminal that was the key window's first responder.
+    /// Unlike `activeTerminalID`, this does NOT clear when a non-terminal (e.g., search field) gets focus,
+    /// so inspector/utility views can safely use it while the user types in their own fields.
+    var lastKnownActiveTerminalID: UUID?
+
     var activeTerminalID: UUID? {
         #if os(macOS)
         guard let firstResponder = NSApplication.shared.keyWindow?.firstResponder as? TerminalView else { return nil }
-        return terminals.first(where: { $0.value.view === firstResponder })?.key
+        let found = terminals.first(where: { $0.value.view === firstResponder })?.key
+        if let found { lastKnownActiveTerminalID = found }
+        return found
         #else
         return nil
         #endif
+    }
+
+    /// Call this immediately after making a terminal the first responder so the latch
+    /// is set even before any poll timer fires.
+    func recordFocus(id: UUID) {
+        lastKnownActiveTerminalID = id
     }
     
     func getOrCreateTerminal(id: UUID, colorScheme: ColorScheme, commandLine: [String]? = nil, paneSessionID: String? = nil) -> ManagedTerminal {
         if let existing = terminals[id] {
             return existing
         }
+        kLog("[KytosDebug][TermMgr] getOrCreateTerminal id=\(id.uuidString.prefix(8)) paneSessionID=\(paneSessionID ?? "nil")")
         #if os(macOS)
         let coordinator: MacOSLocalProcessTerminalCoordinator = paneSessionID != nil
             ? KytosPaneStreamingCoordinator()
@@ -626,7 +599,9 @@ class KytosTerminalManager {
         terminal.terminalDelegate = coordinator
         #if os(macOS)
         if let sid = paneSessionID, let streamCoord = coordinator as? KytosPaneStreamingCoordinator {
-            streamCoord.startStream(sessionID: sid)
+            // Don't call startStream yet — defer to the first sizeChanged so we
+            // attach at the real terminal dimensions, not the 800×600 default.
+            streamCoord.pendingSessionID = sid
         } else {
             coordinator.start(commandLine: commandLine)
         }
@@ -642,12 +617,13 @@ class KytosTerminalManager {
                   requestedID == coordinator.terminalID else { return }
             let hasWindow = terminal.window != nil
             let isFirstResponder = terminal.window?.firstResponder === terminal
-            print("[KytosDebug][Focus] KytosRequestFocus for \(requestedID.uuidString.prefix(8)) — hasWindow=\(hasWindow), isFirstResponder=\(isFirstResponder)")
+            kLog("[KytosDebug][Focus] KytosRequestFocus for \(requestedID.uuidString.prefix(8)) — hasWindow=\(hasWindow), isFirstResponder=\(isFirstResponder)")
             if hasWindow {
                 terminal.window?.makeFirstResponder(terminal)
-                print("[KytosDebug][Focus]   → makeFirstResponder called, now firstResponder=\(terminal.window?.firstResponder === terminal)")
+                KytosTerminalManager.shared.recordFocus(id: requestedID)
+                kLog("[KytosDebug][Focus]   → makeFirstResponder called, now firstResponder=\(terminal.window?.firstResponder === terminal)")
             } else {
-                print("[KytosDebug][Focus]   → NO WINDOW, cannot focus")
+                kLog("[KytosDebug][Focus]   → NO WINDOW, cannot focus")
             }
         }
 
@@ -655,25 +631,27 @@ class KytosTerminalManager {
         let termIDForLog = id
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak terminal] in
             guard let terminal = terminal else {
-                print("[KytosDebug][Focus] Initial focus for \(termIDForLog.uuidString.prefix(8)) — terminal deallocated")
+                kLog("[KytosDebug][Focus] Initial focus for \(termIDForLog.uuidString.prefix(8)) — terminal deallocated")
                 return
             }
             let hasWindow = terminal.window != nil
-            print("[KytosDebug][Focus] Initial focus for \(termIDForLog.uuidString.prefix(8)) — hasWindow=\(hasWindow)")
+            kLog("[KytosDebug][Focus] Initial focus for \(termIDForLog.uuidString.prefix(8)) — hasWindow=\(hasWindow)")
             if let window = terminal.window {
                 window.makeFirstResponder(terminal)
-                print("[KytosDebug][Focus]   → makeFirstResponder called, now firstResponder=\(window.firstResponder === terminal)")
+                KytosTerminalManager.shared.recordFocus(id: termIDForLog)
+                kLog("[KytosDebug][Focus]   → makeFirstResponder called, now firstResponder=\(window.firstResponder === terminal)")
             } else {
-                print("[KytosDebug][Focus]   → NO WINDOW at 0.15s, retrying at 0.35s")
+                kLog("[KytosDebug][Focus]   → NO WINDOW at 0.15s, retrying at 0.35s")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak terminal] in
                     guard let terminal = terminal else { return }
                     let hasWindow2 = terminal.window != nil
-                    print("[KytosDebug][Focus] Retry focus for \(termIDForLog.uuidString.prefix(8)) — hasWindow=\(hasWindow2)")
+                    kLog("[KytosDebug][Focus] Retry focus for \(termIDForLog.uuidString.prefix(8)) — hasWindow=\(hasWindow2)")
                     if let window = terminal.window {
                         window.makeFirstResponder(terminal)
-                        print("[KytosDebug][Focus]   → retry makeFirstResponder, now firstResponder=\(window.firstResponder === terminal)")
+                        KytosTerminalManager.shared.recordFocus(id: termIDForLog)
+                        kLog("[KytosDebug][Focus]   → retry makeFirstResponder, now firstResponder=\(window.firstResponder === terminal)")
                     } else {
-                        print("[KytosDebug][Focus]   → STILL NO WINDOW at 0.35s!")
+                        kLog("[KytosDebug][Focus]   → STILL NO WINDOW at 0.35s!")
                     }
                 }
             }
@@ -775,13 +753,37 @@ struct PaneWorkspaceTerminalView: View {
     #if os(macOS)
     @MainActor
     private func initPaneSession() async {
+        kLog("[KytosDebug][initPaneSession] start — terminalID=\(terminalID.uuidString.prefix(8)), paneSessionID=\(paneSessionID ?? "nil")")
         if let existing = paneSessionID {
             resolvedSessionID = existing
             paneInitDone = true
+            kLog("[KytosDebug][initPaneSession] using existing session: \(existing)")
             return
         }
+        // Prevent duplicate session creation from SwiftUI re-renders.
+        guard KytosTerminalManager.shared.claimSessionCreation(for: terminalID) else {
+            kLog("[KytosDebug][initPaneSession] creation already in flight for \(terminalID.uuidString.prefix(8))")
+            // Another initPaneSession call is already creating a session for this terminal.
+            // Wait briefly and check if the layout was updated with a session ID.
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if case .terminal(_, _, let sid?) = layout {
+                resolvedSessionID = sid
+            }
+            paneInitDone = true
+            return
+        }
+        defer { KytosTerminalManager.shared.releaseSessionCreation(for: terminalID) }
+
+        // Double-check: the layout may have been updated by another view instance.
+        if case .terminal(_, _, let sid?) = layout {
+            resolvedSessionID = sid
+            paneInitDone = true
+            return
+        }
+
         // Create a new pane session on a background thread (blocking socket call).
         let cmdLine = commandLine ?? KytosSettings.shared.resolvedCommandLine()
+        kLog("[KytosDebug][initPaneSession] creating session with cmdLine: \(cmdLine.joined(separator: " "))")
         let newSessionID: String? = await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 let sid = try? KytosPaneClient.shared.createSession(commandLine: cmdLine).id
@@ -790,6 +792,7 @@ struct PaneWorkspaceTerminalView: View {
         }
         if let sid = newSessionID {
             resolvedSessionID = sid
+            kLog("[KytosDebug][initPaneSession] created session: \(sid)")
             // Persist the session ID back into the layout tree.
             if case .terminal(let id, let cmd, nil) = layout {
                 layout = .terminal(id: id, commandLine: cmd, paneSessionID: sid)
@@ -801,7 +804,7 @@ struct PaneWorkspaceTerminalView: View {
     
     private func split(axis: PaneLayoutTree.Axis) {
         let newID = UUID()
-        print("[KytosDebug][Split] axis=\(axis), existingID=\(terminalID.uuidString.prefix(8)), newID=\(newID.uuidString.prefix(8))")
+        kLog("[KytosDebug][Split] axis=\(axis), existingID=\(terminalID.uuidString.prefix(8)), newID=\(newID.uuidString.prefix(8))")
         let newTree = PaneLayoutTree.split(
             axis: axis,
             left: .terminal(id: terminalID, commandLine: commandLine, paneSessionID: resolvedSessionID),
@@ -812,13 +815,13 @@ struct PaneWorkspaceTerminalView: View {
         #if os(macOS)
         if let oldTerminal = KytosTerminalManager.shared.getExistingTerminal(id: terminalID)?.view,
            let window = oldTerminal.window {
-            print("[KytosDebug][Split] Resigning focus on old terminal \(terminalID.uuidString.prefix(8))")
+            kLog("[KytosDebug][Split] Resigning focus on old terminal \(terminalID.uuidString.prefix(8))")
             window.makeFirstResponder(nil)
         }
         #endif
         // Request focus on the new pane after the view hierarchy updates
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            print("[KytosDebug][Split] Requesting focus for new pane \(newID.uuidString.prefix(8))")
+            kLog("[KytosDebug][Split] Requesting focus for new pane \(newID.uuidString.prefix(8))")
             NotificationCenter.default.post(name: NSNotification.Name("KytosRequestFocus"), object: newID)
         }
     }
@@ -880,7 +883,7 @@ struct PaneWorkspaceView: View {
     var body: some View {
         @Bindable var workspaceBindable = workspace
 
-        let _ = print("[KytosDebug][PaneWorkspaceView] body — session=\(workspaceBindable.session.name)")
+        let _ = kLog("[KytosDebug][PaneWorkspaceView] body — session=\(workspaceBindable.session.name)")
 
         PaneLayoutTreeView(layout: $workspaceBindable.session.layout)
             .id(workspaceBindable.session.id)
@@ -918,6 +921,14 @@ struct PaneWorkspaceView: View {
                     #endif
                     if let newLayout = rootLayout.removing(id: id) {
                         workspaceBindable.session.layout = newLayout
+                        // Focus the nearest remaining pane so CMD+W doesn't accidentally close the window.
+                        #if os(macOS)
+                        if let focusID = newLayout.firstLeafID() {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                NotificationCenter.default.post(name: NSNotification.Name("KytosRequestFocus"), object: focusID)
+                            }
+                        }
+                        #endif
                     } else {
                         #if os(macOS)
                         NSApplication.shared.keyWindow?.performClose(nil)
@@ -925,6 +936,25 @@ struct PaneWorkspaceView: View {
                     }
                 }
             }
+    }
+}
+
+import Foundation
+
+private let kLogPath = "/tmp/kytos-debug.log"
+private let kLogLock = NSLock()
+
+func kLog(_ msg: String) {
+    let line = "\(Date()) \(msg)\n"
+    guard let data = line.data(using: .utf8) else { return }
+    kLogLock.lock()
+    defer { kLogLock.unlock() }
+    if let fh = FileHandle(forWritingAtPath: kLogPath) {
+        fh.seekToEndOfFile()
+        fh.write(data)
+        fh.closeFile()
+    } else {
+        FileManager.default.createFile(atPath: kLogPath, contents: data)
     }
 }
 
@@ -954,7 +984,7 @@ struct KytosApp: App {
             if flags == .command {
                 switch event.keyCode {
                 case 13: // W — Close Pane (intercept before macOS closes the window)
-                    print("[KytosDebug][KeyMonitor] Cmd+W intercepted — activeTerminalID=\(KytosTerminalManager.shared.activeTerminalID?.uuidString.prefix(8) ?? "nil")")
+                    kLog("[KytosDebug][KeyMonitor] Cmd+W intercepted — activeTerminalID=\(KytosTerminalManager.shared.activeTerminalID?.uuidString.prefix(8) ?? "nil")")
                     if let id = KytosTerminalManager.shared.activeTerminalID {
                         NotificationCenter.default.post(
                             name: NSNotification.Name("KytosWorkspaceAction"),
@@ -976,7 +1006,7 @@ struct KytosApp: App {
             object: nil,
             queue: .main
         ) { _ in
-            print("[KytosDebug][App] willTerminate — saving state")
+            kLog("[KytosDebug][App] willTerminate — saving state")
             KytosAppModel.shared.save()
         }
         #endif
@@ -990,7 +1020,7 @@ struct KytosApp: App {
                 KelyphosCommands()
             }
         Settings {
-            KelyphosSettingsView(state: shellState)
+            KytosSettingsWindowView(shellState: shellState)
         }
         #else
         mainWindowGroup
@@ -1044,7 +1074,7 @@ struct KytosWindowView: View {
         self._stableID = State(initialValue: resolvedID)
         self.appModel = appModel
         self.shellState = shellState
-        print("[KytosDebug][WindowView] init — windowID=\(windowID.wrappedValue?.uuidString.prefix(8) ?? "nil"), stableID=\(resolvedID.uuidString.prefix(8))")
+        kLog("[KytosDebug][WindowView] init — windowID=\(windowID.wrappedValue?.uuidString.prefix(8) ?? "nil"), stableID=\(resolvedID.uuidString.prefix(8))")
     }
 
     var body: some View {
@@ -1062,11 +1092,11 @@ struct KytosWindowView: View {
             if workspace == nil {
                 workspace = appModel.workspace(for: stableID)
             }
-            print("[KytosDebug][WindowView] onAppear — windowID=\(windowID?.uuidString.prefix(8) ?? "nil"), stableID=\(stableID.uuidString.prefix(8))")
-            print("[KytosDebug][WindowView] workspace: session=\(workspace?.session.name ?? "nil"), totalWorkspaces=\(appModel.windows.count)")
+            kLog("[KytosDebug][WindowView] onAppear — windowID=\(windowID?.uuidString.prefix(8) ?? "nil"), stableID=\(stableID.uuidString.prefix(8))")
+            kLog("[KytosDebug][WindowView] workspace: session=\(workspace?.session.name ?? "nil"), totalWorkspaces=\(appModel.windows.count)")
             if windowID == nil {
                 windowID = stableID
-                print("[KytosDebug][WindowView] Assigned windowID = stableID (\(stableID.uuidString.prefix(8)))")
+                kLog("[KytosDebug][WindowView] Assigned windowID = stableID (\(stableID.uuidString.prefix(8)))")
             }
             // Remove workspace when the NSWindow actually closes (not just SwiftUI re-renders).
             let id = stableID
@@ -1074,17 +1104,17 @@ struct KytosWindowView: View {
                 guard let window = notification.object as? NSWindow,
                       !( window is NSPanel),
                       appModel.windowToID[ObjectIdentifier(window)] == id else { return }
-                print("[KytosDebug][WindowView] NSWindow.willClose — removing workspace for \(id.uuidString.prefix(8))")
+                kLog("[KytosDebug][WindowView] NSWindow.willClose — removing workspace for \(id.uuidString.prefix(8))")
                 appModel.windows.removeValue(forKey: id)
             }
             if !appModel.hasRestoredWindows {
                 appModel.hasRestoredWindows = true
-                print("[KytosDebug][Restore] First window appeared — scheduling restore check in 0.5s")
+                kLog("[KytosDebug][Restore] First window appeared — scheduling restore check in 0.5s")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     let unclaimed = appModel.windows.filter { !appModel.isWindowClaimed($0.key) }
-                    print("[KytosDebug][Restore] Unclaimed workspaces: \(unclaimed.count) (total=\(appModel.windows.count), claimed=\(unclaimed.count == 0 ? appModel.windows.count : appModel.windows.count - unclaimed.count))")
+                    kLog("[KytosDebug][Restore] Unclaimed workspaces: \(unclaimed.count) (total=\(appModel.windows.count), claimed=\(unclaimed.count == 0 ? appModel.windows.count : appModel.windows.count - unclaimed.count))")
                     for (savedID, ws) in unclaimed {
-                        print("[KytosDebug][Restore] Opening window for savedID=\(savedID.uuidString.prefix(8)), session=\(ws.session.name)")
+                        kLog("[KytosDebug][Restore] Opening window for savedID=\(savedID.uuidString.prefix(8)), session=\(ws.session.name)")
                         openWindow(id: "main", value: savedID)
                     }
                     // Re-apply saved tab group structure once the new windows have appeared.
@@ -1100,7 +1130,7 @@ struct KytosWindowView: View {
                                 }
                                 guard groupWindows.count > 1, let anchor = groupWindows.first else { continue }
                                 for window in groupWindows.dropFirst() {
-                                    print("[KytosDebug][Restore] Re-grouping \(appModel.windowToID[ObjectIdentifier(window)]?.uuidString.prefix(8) ?? "?") into tab group")
+                                    kLog("[KytosDebug][Restore] Re-grouping \(appModel.windowToID[ObjectIdentifier(window)]?.uuidString.prefix(8) ?? "?") into tab group")
                                     anchor.addTabbedWindow(window, ordered: .above)
                                 }
                                 anchor.makeKeyAndOrderFront(nil)
@@ -1109,7 +1139,7 @@ struct KytosWindowView: View {
                     }
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                    print("[KytosDebug][Restore] Pruning at 3s — claimed=\(appModel.windows.filter { appModel.isWindowClaimed($0.key) }.count)")
+                    kLog("[KytosDebug][Restore] Pruning at 3s — claimed=\(appModel.windows.filter { appModel.isWindowClaimed($0.key) }.count)")
                     appModel.pruneOrphanedWorkspaces()
                 }
             }
@@ -1146,7 +1176,7 @@ struct KytosWindowView: View {
             guard let userInfo = notification.userInfo,
                   let label = userInfo["label"] as? String else { return }
 
-            print("[KytosDebug][WindowView:\(stableID.uuidString.prefix(8))] KelyphosCommandInvoked: '\(label)'")
+            kLog("[KytosDebug][WindowView:\(stableID.uuidString.prefix(8))] KelyphosCommandInvoked: '\(label)'")
 
             if label == "Close Pane" {
                 if let id = KytosTerminalManager.shared.activeTerminalID {
@@ -1166,7 +1196,7 @@ struct KytosWindowView: View {
             guard let userInfo = notification.userInfo,
                   let action = userInfo["action"] as? String else { return }
 
-            print("[KytosDebug][WindowView:\(stableID.uuidString.prefix(8))] KytosWorkspaceAction: '\(action)'")
+            kLog("[KytosDebug][WindowView:\(stableID.uuidString.prefix(8))] KytosWorkspaceAction: '\(action)'")
 
             // With flattened model, each window/tab IS one session.
             // "closeSession" = close this tab/window.

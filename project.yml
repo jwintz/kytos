@@ -26,6 +26,11 @@ targets:
         product: pane
       - package: SwiftTerm
         product: SwiftTerm
+    preBuildScripts:
+      - name: Apply Pane Patches
+        script: |
+          "${SRCROOT}/Scripts/apply-pane-patches.sh"
+        basedOnDependencyAnalysis: false
     postBuildScripts:
       - name: Build mksh
         script: |

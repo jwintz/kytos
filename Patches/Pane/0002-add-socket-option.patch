@@ -1,0 +1,23 @@
+diff --git a/Sources/pane/main.swift b/Sources/pane/main.swift
+index 820482f..e965011 100644
+--- a/Sources/pane/main.swift
++++ b/Sources/pane/main.swift
+@@ -8,6 +8,9 @@ struct GlobalOptions: ParsableArguments {
+ 
+     @Flag(name: .customLong("no-auto-start"), help: "Don't auto-start the server for client commands.")
+     var noAutoStart = false
++
++    @Option(name: .customLong("socket"), help: "Override the Unix socket path used by the server/client.")
++    var socket: String?
+ }
+ 
+ struct PaneContext {
+@@ -22,7 +25,7 @@ struct PaneContext {
+             logger.info("logging enabled", metadata: ["path": "\(logPath)"])
+         }
+         self.logger = logger
+-        self.socketPath = try PanePaths.socketPath()
++        self.socketPath = try options.socket ?? PanePaths.socketPath()
+         self.logToFile = options.log
+     }
+ 
