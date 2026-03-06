@@ -81,6 +81,8 @@ struct KytosPaneTerminalSnapshot {
     let cursorY: Int
     let isAlternate: Bool
     let lines: [[KytosPaneCell]]
+    /// Scrollback history received from the server, oldest line first. Empty when unavailable.
+    let scrollbackLines: [[KytosPaneCell]]
 }
 
 struct KytosPaneTerminalDelta {
@@ -185,7 +187,20 @@ private struct BinaryReader {
             for _ in 0..<cellCount { try line.append(readCell()) }
             lines.append(line)
         }
-        return KytosPaneTerminalSnapshot(cols: cols, rows: rows, cursorX: cursorX, cursorY: cursorY, isAlternate: isAlternate, lines: lines)
+        // Scrollback is optional — old servers won't send this field.
+        var scrollbackLines: [[KytosPaneCell]] = []
+        if remaining >= 2 {
+            let scrollbackCount = Int(try readUInt16())
+            scrollbackLines.reserveCapacity(scrollbackCount)
+            for _ in 0..<scrollbackCount {
+                let cellCount = Int(try readUInt16())
+                var line: [KytosPaneCell] = []
+                line.reserveCapacity(cellCount)
+                for _ in 0..<cellCount { try line.append(readCell()) }
+                scrollbackLines.append(line)
+            }
+        }
+        return KytosPaneTerminalSnapshot(cols: cols, rows: rows, cursorX: cursorX, cursorY: cursorY, isAlternate: isAlternate, lines: lines, scrollbackLines: scrollbackLines)
     }
 
     mutating func readDelta() throws -> KytosPaneTerminalDelta {
@@ -565,12 +580,36 @@ final class KytosPaneClient {
 extension KytosPaneTerminalSnapshot {
     /// Converts the snapshot to raw ANSI escape sequences for SwiftTerm.
     ///
-    /// We do NOT clear the screen (ESC[2J) because that causes a visible blank flash
-    /// between the clear and the first content arriving in SwiftTerm's rendering pipeline.
-    /// Instead each row is addressed with an absolute cursor move and overwritten in-place.
+    /// Scrollback lines are written first as plain output (each ending \r\n) so they
+    /// push naturally into SwiftTerm's scrollback ring. The screen content follows,
+    /// using absolute cursor positioning to overwrite in-place without a flash.
     func toANSIBytes() -> [UInt8] {
         var out: [UInt8] = []
-        out.reserveCapacity(cols * rows * 8)
+        out.reserveCapacity((scrollbackLines.count + rows) * cols * 8)
+
+        // --- Scrollback ---
+        if !scrollbackLines.isEmpty {
+            var lastAttr: KytosPaneCellAttribute? = nil
+            for line in scrollbackLines {
+                var col = 0
+                for cell in line.prefix(cols) {
+                    if cell.width == 0 { col += 1; continue }
+                    if lastAttr != cell.attribute {
+                        out.append(contentsOf: cell.attribute.sgrBytes())
+                        lastAttr = cell.attribute
+                    }
+                    let ch = cell.char.isEmpty || cell.char == "\0" ? " " : cell.char
+                    out.append(contentsOf: ch.utf8)
+                    col += Int(max(1, cell.width))
+                }
+                // Reset attributes and emit CR+LF to push the line into scrollback.
+                out.appendAnsi("\u{1b}[0m")
+                lastAttr = nil
+                out.appendAnsi("\r\n")
+            }
+        }
+
+        // --- Screen ---
         var lastAttr: KytosPaneCellAttribute? = nil
         for (rowIdx, line) in lines.prefix(rows).enumerated() {
             // Move cursor to start of this row.

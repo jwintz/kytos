@@ -25,11 +25,11 @@ The following table reflects work completed in the first implementation session.
 | D2 | Silent failure on missing snapshot | ✅ Fixed | "Stream failed" overlay with Retry button |
 | D3 | App quit blocks on `readLoop` poll | ℹ️ Noted | Existing known issue; 500 ms max delay, acceptable |
 | D4 | Navigator process names not live | ✅ Fixed | `foregroundProcessName(for:)` in `KytosTerminalManager`; 1s polling in `KytosSessionsSidebar`; `PaneLeafRow` shows foreground process as primary label |
-| D5 | Scrollback not restored from snapshots | ⏳ Deferred | P3 — requires Pane protocol patch |
+| D5 | Scrollback not restored from snapshots | ✅ Fixed | New `0004-scrollback-in-snapshots.patch`; server sends up to 500 scrollback lines; client feeds them as plain output before the screen so SwiftTerm's scrollback ring is populated on reattach |
 
 ### Remaining Work
 
-- **P3 — D5 / item 6a**: Scrollback in Pane snapshots — needs new Pane server patch to transmit scrollback lines with snapshots
+All audit findings are resolved. No outstanding items.
 
 ---
 
