@@ -12,6 +12,10 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
     /// call (real terminal dimensions), not at construction time (80×25 default).
     var pendingSessionID: String?
 
+    /// Stores a resize that arrived while the initial snapshot handshake was in progress,
+    /// so it can be flushed once the stream is established.
+    private var pendingResizeDuringAttach: (cols: Int, rows: Int)?
+
     private let lock = NSLock()
     private var _connection: KytosPaneConnection?
     private var connection: KytosPaneConnection? {
@@ -80,9 +84,11 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
                 var snapshot: KytosPaneTerminalSnapshot?
                 var earlyDeltas: [[UInt8]] = []
 
-                for i in 0..<50 {
+                var budget = 500
+                while budget > 0 {
+                    budget -= 1
                     guard let msg = try conn.readFullMessage() else {
-                        kLog("[KytosDebug][PaneStream] readFullMessage returned nil at iteration \(i)")
+                        kLog("[KytosDebug][PaneStream] readFullMessage returned nil (budget=\(budget))")
                         break
                     }
                     switch msg {
@@ -127,11 +133,13 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
 
                 guard let snap = snapshot else {
                     kLog("[KytosDebug][PaneStream] No snapshot received for session \(effectiveID) (response=\(response != nil))")
+                    self.notifyStreamFailed()
                     return
                 }
                 self.finishAttach(conn: conn, tv: tv, snapshot: snap, earlyDeltas: earlyDeltas, cols: cols, rows: rows)
             } catch {
                 kLog("[KytosDebug][PaneStream] Stream setup error for \(effectiveID): \(error)")
+                self.notifyStreamFailed()
             }
         }
     }
@@ -144,7 +152,9 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
             var snapshot: KytosPaneTerminalSnapshot?
             var earlyDeltas: [[UInt8]] = []
 
-            for i in 0..<50 {
+            var budget = 500
+            while budget > 0 {
+                budget -= 1
                 guard let msg = try conn.readFullMessage() else { break }
                 switch msg {
                 case .response(let resp):
@@ -177,10 +187,12 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
                 tv.feed(byteArray: delta[...])
             }
         }
-        // Force SIGWINCH for shell redraw
-        try? conn.sendBinaryResize(cols: max(cols - 1, 1), rows: rows)
-        usleep(50_000)
-        try? conn.sendBinaryResize(cols: cols, rows: rows)
+        // Inform the server of the real terminal size; it will SIGWINCH the shell.
+        // Also flush any resize that arrived while the snapshot handshake was in progress.
+        let finalCols = pendingResizeDuringAttach?.cols ?? cols
+        let finalRows = pendingResizeDuringAttach?.rows ?? rows
+        pendingResizeDuringAttach = nil
+        try? conn.sendBinaryResize(cols: finalCols, rows: finalRows)
         self.readLoop(conn: conn, tv: tv)
     }
 
@@ -194,6 +206,16 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
             conn.close()
         }
         connection = nil
+    }
+
+    /// Posts `KytosStreamFailed` so the owning view can show a reconnecting overlay.
+    private func notifyStreamFailed() {
+        guard let tid = terminalID else { return }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosStreamFailed"),
+                object: tid)
+        }
     }
 
     // MARK: - Read Loop
@@ -234,6 +256,15 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
             lastRows = newRows
             kLog("[KytosDebug][PaneStream] sizeChanged triggering startStream for pending session \(sid), \(newCols)x\(newRows)")
             startStream(sessionID: sid, cols: newCols, rows: newRows)
+            return
+        }
+
+        // Resize arrived while the initial snapshot handshake is still in progress —
+        // buffer it so finishAttach can flush it once the connection is live.
+        if streaming, connection == nil {
+            pendingResizeDuringAttach = (cols: newCols, rows: newRows)
+            lastCols = newCols
+            lastRows = newRows
             return
         }
 

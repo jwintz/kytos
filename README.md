@@ -1,6 +1,6 @@
 # Kytos
 
-A terminal emulator for macOS and iPadOS built on [KelyphosKit](../kelyphos) and [SwiftTerm](Submodules/SwiftTerm).
+A terminal emulator for macOS and iPadOS built on [KelyphosKit](../kelyphos) and [SwiftTerm](Submodules/SwiftTerm) leveraging [Pane](Submodules/Pane).
 
 ## Building
 
@@ -54,33 +54,54 @@ The navigator sidebar lists every leaf pane with its shell name (e.g. "zsh") and
 | App quit | Streams disconnected; server keeps running; sessions survive restart. |
 | Server crash | All IDs cleared on next launch; fresh sessions created. |
 
-## iPadOS
+## Pane
 
-No pane server. All terminal sessions use an in-process PTY with the bundled mksh binary. No session persistence between launches.
+A terminal multiplexer for macOS written in Swift. It is similar in spirit to tmux or screen, allowing you to run terminal sessions in the background and attach/detach from them at will.
 
+### Core Architecture
 
-## Pane — what it provides
+* **Client-Server Model**: Pane operates with a persistent background server (`PaneServer`) that manages multiple terminal sessions. Clients (`PaneClient`) interact with the server via Unix Domain Sockets located in `/tmp/pane-<uid>/`.
+* **Terminal Emulation**: The server uses the **SwiftTerm** library to emulate a full terminal for each session. It connects to local shell processes (like zsh)        using a PTY.
+* **Hybrid Communication Protocol**:
+  * **JSON**: Used for control commands (creating, listing, or destroying sessions).
+  * **Custom Binary Protocol**: A high-performance binary format (`PaneBinaryCodable`) is used for streaming terminal updates. It sends "deltas" (only the
+changed lines) to minimize latency and bandwidth.
+* **Rendering**: The client uses drivers adapted from **TermKit** (specifically `UnixDriver`) to render the remote terminal state onto the user's local console.
 
-[Pane](Submodules/Pane) is a tmux-like terminal multiplexer built on top of SwiftTerm. It exposes a Unix-domain-socket client/server protocol with the following CLI commands:
+### Key Features
 
-| Command | Description |
-|---|---|
-| `pane` | Create a session and attach immediately (default) |
-| `pane server` | Start the background server explicitly |
-| `pane status` | Check whether a server is running (PID, socket, uptime) |
-| `pane list-servers` | Enumerate all live pane servers in the runtime directory |
-| `pane create [name] [cmd…]` | Create a named session, optionally running a specific command |
-| `pane list` | List all sessions (id, pid, name, state, created time) |
-| `pane attach [session-id]` | Attach to a session and stream its terminal (auto-starts server) |
-| `pane destroy <session-id>` | Destroy a session |
+1. **Session Persistence**: Sessions continue running on the server even after you detach or close your terminal window.
+2. **Efficient Streaming**: Uses incremental updates (deltas) and a binary wire format to ensure the terminal feels responsive even over the socket connection.
+3. **Command Mode (`Ctrl-B`)**: Similar to `tmux`, Pane uses a prefix key (`Ctrl-B`) to trigger commands while attached:
+   * `d`: **Detach** from the session.
+   * `c`: **Create** a new session and immediately switch to it.
+   * `n`: Switch to the **next** session.
+   * `p`: Switch to the **previous** session.
+4. **Multi-Client Support**: Multiple clients can attach to the same session simultaneously, with the server broadcasting updates to all of them in real-time.
+5. **Auto-Lifecycle Management**: The client can automatically launch the server if it isn't already running when you try to create or attach to a session.
+6. **Advanced Terminal Support**: Supports 256-color and TrueColor (24-bit) output, bold, dim, blink, invert, and underline styles.
 
-### Protocol detail
+### CLI Interface
 
-- **Transport**: Unix domain socket (`AF_UNIX / SOCK_STREAM`), one socket per server, path under `$XDG_RUNTIME_DIR` or equivalent.
-- **Wire format**: JSON for control messages (`createSession`, `listSessions`, `destroySession`, `ping`); custom binary format for high-frequency terminal data (`snapshot`, `delta`, `input`, `resize`) to minimise overhead.
-- **Session model**: sessions are independent PTY processes managed by the server; clients attach and receive a full terminal snapshot on connect, then incremental deltas. Multiple clients can subscribe to the same session simultaneously.
-- **Auto-start**: the client auto-starts the server process if the socket is absent or the connection is refused.
+The `pane` executable provides several subcommands:
+* `pane create [name] [command]`: Starts a new session (optionally with a custom name and command).
+* `pane list`: Displays all active sessions, their PIDs, and their status.
+* `pane attach [sessionID]`: Connects your current terminal to a background session.
+* `pane destroy [sessionID]`: Forcefully terminates a session.
+* `pane status`: Reports the health and PID of the running server.
+* `pane server`: Manually starts the background server process.
+* `pane list-servers`: Lists all active Pane servers detected in the temporary runtime directory.
+
+### Technical Implementation Details
+
+* **Runtime Directory**: `/tmp/pane-<uid>/` contains the communication socket (`default`) and a PID file (`pane.pid`).
+* **Concurrency**: Uses Swift Concurrency and `DispatchQueue` extensively to handle asynchronous I/O and process management safely.
+* **Platform Support**: While defined for macOS 13+, the inclusion of `WindowsDriver.swift` and `CursesDriver.swift` points towards a highly modular design capable of cross-platform expansion.
 
 ### ⚠️ Pane is an executable, not a library
 
 The `pane` package only exposes an executable target — its types are not `public` and cannot be imported. `KytosPaneClient.swift` implements the same Unix-socket / JSON-framing protocol directly, without importing the pane module. The pane binary is bundled in the macOS app via the **Bundle pane** post-build script in `project.yml` and started on-demand by `KytosPaneClient.startServer()`.
+
+### iPadOS
+
+No pane server. All terminal sessions use an in-process PTY with the bundled mksh binary. No session persistence between launches.

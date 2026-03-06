@@ -58,6 +58,12 @@ private struct KytosTerminalSettingsTab: View {
 
                 Toggle("Cursor Blink", isOn: $settings.cursorBlink)
 
+                Picker("256-Color Palette", selection: $settings.ansi256Palette) {
+                    Text("Standard (xterm)").tag(Ansi256PaletteStrategy.xterm)
+                    Text("Perceptual (base16Lab)").tag(Ansi256PaletteStrategy.base16Lab)
+                }
+                .help("base16Lab maps the 240 xterm colors to perceptually match your 16-color palette. Recommended with custom color schemes.")
+
                 HStack {
                     Text("Horizontal Margins")
                     Slider(value: $settings.horizontalMargin, in: 0...32, step: 2)

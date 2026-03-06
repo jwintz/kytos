@@ -21,6 +21,7 @@ public final class KytosSettings {
     private let fontSizeKey = "kytos_fontSize"
     private let shellChoiceKey = "kytos_shellChoice"
     private let horizontalMarginKey = "kytos_horizontalMargin"
+    private let ansi256PaletteKey = "kytos_ansi256Palette"
     
     // We bind properties manually to UserDefaults because @AppStorage isn't easily supported natively inside @Observable classes
     
@@ -62,6 +63,14 @@ public final class KytosSettings {
     public var horizontalMargin: CGFloat {
         didSet { UserDefaults.standard.set(horizontalMargin, forKey: horizontalMarginKey) }
     }
+
+    public var ansi256Palette: Ansi256PaletteStrategy {
+        didSet {
+            UserDefaults.standard.set(
+                ansi256Palette == .base16Lab ? "base16Lab" : "xterm",
+                forKey: ansi256PaletteKey)
+        }
+    }
     
     private init() {
         let defaults = UserDefaults.standard
@@ -73,7 +82,8 @@ public final class KytosSettings {
             fontFamilyKey: "SF Mono",
             fontSizeKey: 12.0,
             shellChoiceKey: ShellChoice.embeddedMksh.rawValue,
-            horizontalMarginKey: 0.0
+            horizontalMarginKey: 0.0,
+            ansi256PaletteKey: "xterm"
         ])
 
         let styleRaw = defaults.string(forKey: cursorStyleKey) ?? "steadyBlock"
@@ -94,6 +104,7 @@ public final class KytosSettings {
         }
 
         self.horizontalMargin = CGFloat(defaults.double(forKey: horizontalMarginKey))
+        self.ansi256Palette = defaults.string(forKey: ansi256PaletteKey) == "base16Lab" ? .base16Lab : .xterm
 
         print("[KytosDebug][Settings] init — cursorStyle=\(styleRaw), cursorBlink=\(cursorBlink), fontFamily=\(fontFamily), fontSize=\(fontSize), shellChoice=\(shellChoice.rawValue)")
         print("[KytosDebug][Settings] raw UserDefaults — cursorStyle=\(defaults.string(forKey: cursorStyleKey) ?? "nil"), fontFamily=\(defaults.string(forKey: fontFamilyKey) ?? "nil"), fontSize=\(defaults.double(forKey: fontSizeKey)), shellChoice=\(defaults.string(forKey: shellChoiceKey) ?? "nil")")

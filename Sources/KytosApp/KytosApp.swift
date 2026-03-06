@@ -484,44 +484,94 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
     let paneSessionID: String?
     let colorScheme: ColorScheme
     let settings: KytosSettings
-    
+
+    // MARK: - Coordinator
+
+    /// Holds per-instance state that must survive SwiftUI re-renders.
+    class Coordinator {
+        /// KytosLayoutChanged observer token — removed in deinit to prevent stacking.
+        var layoutObserver: NSObjectProtocol?
+        /// Hash of last-applied appearance settings; prevents redundant redraws.
+        var lastSettingsHash: Int = 0
+
+        deinit {
+            #if os(macOS)
+            if let obs = layoutObserver {
+                NotificationCenter.default.removeObserver(obs)
+            }
+            #endif
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    // MARK: - Appearance
+
+    private func settingsHash() -> Int {
+        var hasher = Hasher()
+        hasher.combine(colorScheme)
+        hasher.combine(settings.fontFamily)
+        hasher.combine(settings.fontSize)
+        hasher.combine(settings.cursorBlink)
+        hasher.combine(String(describing: settings.cursorStyle))
+        hasher.combine(settings.ansi256Palette == .base16Lab)
+        return hasher.finalize()
+    }
+
     private func updateTerminalAppearance(_ view: TerminalView) {
         let colorName = colorScheme == .dark ? "Kytos-dark" : "Kytos-light"
         if let url = Bundle.main.url(forResource: colorName, withExtension: "itermcolors") {
             loadITermColors(from: url, into: view)
         }
-        
         view.font = settings.nsFont
-        
-        var effectiveStyle = settings.cursorStyle
         #if os(macOS)
+        // Combine shape and blink into a single CursorStyle value.
+        let effectiveStyle: CursorStyle
+        switch settings.cursorStyle {
+        case .steadyBlock:     effectiveStyle = settings.cursorBlink ? .blinkBlock     : .steadyBlock
+        case .steadyUnderline: effectiveStyle = settings.cursorBlink ? .blinkUnderline : .steadyUnderline
+        case .steadyBar:       effectiveStyle = settings.cursorBlink ? .blinkBar       : .steadyBar
+        default:               effectiveStyle = .steadyBlock
+        }
         view.terminal.setCursorStyle(effectiveStyle)
-        #endif
-        // Note: SwiftTerm's TerminalView doesn't seem to expose a direct `blink` toggle property natively outside macOS cursor abstractions. 
-        // We will pass the steady struct to the terminal.
-        
-        #if os(macOS)
+        view.terminal.ansi256PaletteStrategy = settings.ansi256Palette
         view.needsDisplay = true
         #else
         view.setNeedsDisplay()
         #endif
     }
-    
+
+    // MARK: - iOS
+
     func makeUIView(context: Context) -> TerminalView {
-        let terminal = KytosTerminalManager.shared.getOrCreateTerminal(id: terminalID, colorScheme: colorScheme, commandLine: commandLine, paneSessionID: paneSessionID).view
+        let terminal = KytosTerminalManager.shared.getOrCreateTerminal(
+            id: terminalID, colorScheme: colorScheme,
+            commandLine: commandLine, paneSessionID: paneSessionID).view
+        context.coordinator.lastSettingsHash = settingsHash()
         updateTerminalAppearance(terminal)
         return terminal
     }
-    
+
     func updateUIView(_ uiView: TerminalView, context: Context) {
+        let hash = settingsHash()
+        guard hash != context.coordinator.lastSettingsHash else { return }
+        context.coordinator.lastSettingsHash = hash
         updateTerminalAppearance(uiView)
     }
-    
+
+    // MARK: - macOS
+
     func makeNSView(context: Context) -> TerminalView {
-        let terminal = KytosTerminalManager.shared.getOrCreateTerminal(id: terminalID, colorScheme: colorScheme, commandLine: commandLine, paneSessionID: paneSessionID).view
+        let terminal = KytosTerminalManager.shared.getOrCreateTerminal(
+            id: terminalID, colorScheme: colorScheme,
+            commandLine: commandLine, paneSessionID: paneSessionID).view
+        context.coordinator.lastSettingsHash = settingsHash()
         updateTerminalAppearance(terminal)
-        // Re-trigger sizeChanged after layout changes (e.g. new splits)
-        NotificationCenter.default.addObserver(forName: NSNotification.Name("KytosLayoutChanged"), object: nil, queue: .main) { [weak terminal] _ in
+        // Re-trigger sizeChanged after layout changes (e.g. new splits).
+        // Token stored in coordinator so the observer is removed when the view is torn down.
+        context.coordinator.layoutObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("KytosLayoutChanged"), object: nil, queue: .main
+        ) { [weak terminal] _ in
             guard let tv = terminal else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 tv.needsLayout = true
@@ -530,13 +580,12 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
         }
         return terminal
     }
-    
+
     func updateNSView(_ nsView: TerminalView, context: Context) {
+        let hash = settingsHash()
+        guard hash != context.coordinator.lastSettingsHash else { return }
+        context.coordinator.lastSettingsHash = hash
         updateTerminalAppearance(nsView)
-    }
-    
-    func makeCoordinator() -> MacOSLocalProcessTerminalCoordinator {
-        KytosTerminalManager.shared.getOrCreateTerminal(id: terminalID, colorScheme: colorScheme, commandLine: commandLine, paneSessionID: paneSessionID).coordinator
     }
 }
 
@@ -671,7 +720,9 @@ class KytosTerminalManager {
         #endif
         coordinator.terminalID = id
         
-        let terminal = TerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        // Use .zero — SwiftUI layout delivers the real size before the first sizeChanged,
+        // preventing a spurious 800×600 resize being sent to the pane server.
+        let terminal = TerminalView(frame: .zero)
         #if os(macOS)
         terminal.autoresizingMask = [.width, .height]
         terminal.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -686,11 +737,10 @@ class KytosTerminalManager {
         terminal.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         #endif
         
-        let colorName = colorScheme == .dark ? "Kytos-dark" : "Kytos-light"
-        if let url = Bundle.main.url(forResource: colorName, withExtension: "itermcolors") {
-            loadITermColors(from: url, into: terminal)
-        }
-        
+        // Colors, font, and cursor style are applied by updateTerminalAppearance in the
+        // representable's makeNSView/makeUIView immediately after getOrCreateTerminal returns.
+        // No need to call loadITermColors here; doing so would apply colors twice.
+
         #if os(macOS)
         terminal.nativeBackgroundColor = .clear
         terminal.layer?.backgroundColor = NSColor.clear.cgColor
@@ -863,20 +913,28 @@ struct PaneWorkspaceTerminalView: View {
     @State private var resolvedSessionID: String?
     /// Set to true once we've attempted session creation (even if it failed).
     @State private var paneInitDone: Bool = false
+    /// True when the streaming coordinator failed to obtain a snapshot (shows overlay).
+    @State private var streamFailed: Bool = false
 
     var body: some View {
         #if os(macOS)
         Group {
             if paneInitDone {
-                PaneWorkspaceTerminalRepresentable(
-                    terminalID: terminalID,
-                    commandLine: commandLine,
-                    paneSessionID: resolvedSessionID,
-                    colorScheme: colorScheme,
-                    settings: settings
-                )
-                .padding(.horizontal, settings.horizontalMargin)
-                .background(Color.clear)
+                ZStack {
+                    PaneWorkspaceTerminalRepresentable(
+                        terminalID: terminalID,
+                        commandLine: commandLine,
+                        paneSessionID: resolvedSessionID,
+                        colorScheme: colorScheme,
+                        settings: settings
+                    )
+                    .padding(.horizontal, settings.horizontalMargin)
+                    .background(Color.clear)
+
+                    if streamFailed {
+                        streamFailedOverlay
+                    }
+                }
                 .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosWorkspaceAction"))) { notification in
                     guard let userInfo = notification.userInfo,
                           let id = userInfo["id"] as? UUID,
@@ -887,6 +945,10 @@ struct PaneWorkspaceTerminalView: View {
                     case "splitVertical": split(axis: .vertical)
                     default: break
                     }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosStreamFailed"))) { notification in
+                    guard let failedID = notification.object as? UUID, failedID == terminalID else { return }
+                    streamFailed = true
                 }
             } else {
                 Color.clear
@@ -937,6 +999,36 @@ struct PaneWorkspaceTerminalView: View {
     }
 
     #if os(macOS)
+    /// Overlay shown when the streaming coordinator failed to receive a snapshot.
+    @ViewBuilder private var streamFailedOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.55)
+            VStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.yellow)
+                Text("Stream failed")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Text("The terminal could not receive its initial screen state.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.8))
+                    .multilineTextAlignment(.center)
+                Button("Retry") {
+                    streamFailed = false
+                    // Trigger a reconnect by forcing a sizeChanged via layout invalidation.
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("KytosLayoutChanged"), object: nil)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            .padding(20)
+        }
+        .allowsHitTesting(true)
+        .transition(.opacity)
+    }
+
     @MainActor
     private func initPaneSession() async {
         // Wait for reconciliation to finish clearing dead/duplicate session IDs
@@ -1004,9 +1096,11 @@ struct PaneWorkspaceTerminalView: View {
         if let sid = newSessionID {
             resolvedSessionID = sid
             kLog("[KytosDebug][initPaneSession] created session: \(sid)")
-            // Persist the session ID (and command line if it was nil) back into the layout tree.
-            if case .terminal(let id, let cmd, nil) = layout {
-                layout = .terminal(id: id, commandLine: cmd ?? cmdLine, paneSessionID: sid)
+            // Persist the session ID and the resolved command line back into the layout tree.
+            // Storing cmdLine (not just cmd) ensures the navigator shows the real shell name
+            // rather than "Shell" for panes started without an explicit commandLine.
+            if case .terminal(let id, _, nil) = layout {
+                layout = .terminal(id: id, commandLine: cmdLine, paneSessionID: sid)
                 KytosAppModel.shared.save()
             }
         }

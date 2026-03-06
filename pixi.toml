@@ -1,0 +1,17 @@
+[workspace]
+name = "kytos"
+version = "0.1.0"
+description = "A terminal emulator for macOS and iPadOS"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64"]
+
+[tasks]
+# Force-regenerate the Xcode project from project.yml (always runs XcodeGen).
+generate = "swift run xcodegen generate --spec project.yml"
+
+# Regenerate only when project.yml is newer than the generated project.pbxproj.
+# Use `pixi run generate` to force-regenerate unconditionally.
+generate-if-needed = "bash -c 'test Kytos.xcodeproj/project.pbxproj -nt project.yml || swift run xcodegen generate --spec project.yml'"
+
+build = { cmd = "xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build", depends-on = ["generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk" } }
+run = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); exec \"$BUILT/Kytos.app/Contents/MacOS/Kytos\"'", depends-on = ["build"] }

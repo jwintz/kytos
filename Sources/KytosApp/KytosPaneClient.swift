@@ -564,26 +564,32 @@ final class KytosPaneClient {
 
 extension KytosPaneTerminalSnapshot {
     /// Converts the snapshot to raw ANSI escape sequences for SwiftTerm.
+    ///
+    /// We do NOT clear the screen (ESC[2J) because that causes a visible blank flash
+    /// between the clear and the first content arriving in SwiftTerm's rendering pipeline.
+    /// Instead each row is addressed with an absolute cursor move and overwritten in-place.
     func toANSIBytes() -> [UInt8] {
         var out: [UInt8] = []
         out.reserveCapacity(cols * rows * 8)
-        // Clear screen, home cursor
-        out.appendAnsi("\u{1b}[2J\u{1b}[H")
         var lastAttr: KytosPaneCellAttribute? = nil
         for (rowIdx, line) in lines.prefix(rows).enumerated() {
+            // Move cursor to start of this row.
+            out.appendAnsi("\u{1b}[\(rowIdx + 1);1H")
+            var col = 0
             for cell in line.prefix(cols) {
-                if let la = lastAttr, cell.attribute != la {
-                    out.appendAnsi("\u{1b}[0m")
-                    lastAttr = nil
-                }
-                if lastAttr == nil {
+                // Skip spacer cells that follow a wide character (width == 0).
+                if cell.width == 0 { col += 1; continue }
+                // Only emit SGR when the attribute changes — avoids per-cell reset banding.
+                if lastAttr != cell.attribute {
                     out.append(contentsOf: cell.attribute.sgrBytes())
                     lastAttr = cell.attribute
                 }
                 let ch = cell.char.isEmpty || cell.char == "\0" ? " " : cell.char
                 out.append(contentsOf: ch.utf8)
+                col += Int(max(1, cell.width))
             }
-            if rowIdx < rows - 1 { out.appendAnsi("\r\n") }
+            // Erase to end-of-line if the line was shorter than cols.
+            if col < cols { out.appendAnsi("\u{1b}[K") }
         }
         out.appendAnsi("\u{1b}[0m")
         out.appendAnsi("\u{1b}[\(cursorY + 1);\(cursorX + 1)H")
@@ -593,20 +599,24 @@ extension KytosPaneTerminalSnapshot {
 
 extension KytosPaneTerminalDelta {
     /// Converts the delta to ANSI escape sequences for the affected rows.
+    ///
+    /// Saves and restores the cursor so updates outside the cursor row don't
+    /// cause a visible cursor jump during the feed.
     func toANSIBytes() -> [UInt8] {
         var out: [UInt8] = []
         out.reserveCapacity(lines.count * 200)
+        out.appendAnsi("\u{1b}[s")  // save cursor position
         for (offset, line) in lines.enumerated() {
             let row = startY + offset
             guard row <= endY else { break }
+            // Move to start of row and erase the entire line before writing.
             out.appendAnsi("\u{1b}[\(row + 1);1H\u{1b}[2K")
             var lastAttr: KytosPaneCellAttribute? = nil
             for cell in line {
-                if let la = lastAttr, cell.attribute != la {
-                    out.appendAnsi("\u{1b}[0m")
-                    lastAttr = nil
-                }
-                if lastAttr == nil {
+                // Skip spacer cells following wide characters.
+                if cell.width == 0 { continue }
+                // Only emit SGR when the attribute changes.
+                if lastAttr != cell.attribute {
                     out.append(contentsOf: cell.attribute.sgrBytes())
                     lastAttr = cell.attribute
                 }
@@ -615,6 +625,7 @@ extension KytosPaneTerminalDelta {
             }
         }
         out.appendAnsi("\u{1b}[0m")
+        out.appendAnsi("\u{1b}[u")  // restore saved cursor position
         out.appendAnsi("\u{1b}[\(cursorY + 1);\(cursorX + 1)H")
         return out
     }
@@ -622,12 +633,18 @@ extension KytosPaneTerminalDelta {
 
 private extension KytosPaneCellAttribute {
     func sgrBytes() -> [UInt8] {
-        var parts: [String] = ["0"]
-        if style & 1 != 0 { parts.append("1") }  // bold
-        if style & 2 != 0 { parts.append("4") }  // underline
-        if style & 4 != 0 { parts.append("5") }  // blink
-        if style & 8 != 0 { parts.append("7") }  // inverse
-        if style & 32 != 0 { parts.append("2") } // dim
+        var parts: [String] = ["0"]  // reset first
+        if style & 1  != 0 { parts.append("1") }   // bold
+        if style & 2  != 0 { parts.append("4") }   // underline
+        if style & 4  != 0 { parts.append("5") }   // blink
+        if style & 8  != 0 { parts.append("7") }   // inverse
+        if style & 32 != 0 { parts.append("2") }   // dim
+        // If a color is marked as inverted-default and the inverse style bit isn't already
+        // set, emit SGR 7 to enable reverse-video so the inversion takes effect.
+        if style & 8 == 0,
+           foreground == .defaultInvertedColor || background == .defaultInvertedColor {
+            parts.append("7")
+        }
         parts.append(foreground.sgrForeground())
         parts.append(background.sgrBackground())
         let sgr = "\u{1b}[" + parts.joined(separator: ";") + "m"
