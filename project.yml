@@ -9,7 +9,6 @@ packages:
     path: ../kelyphos
   pane:
     path: Submodules/Pane
-
   SwiftTerm:
     path: Submodules/SwiftTerm
 

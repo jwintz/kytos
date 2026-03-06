@@ -66,6 +66,7 @@ struct KytosSessionsSidebar: View {
     @Environment(KytosWorkspace.self) private var workspace
     #if os(macOS)
     @State private var liveSessions: [String: KytosPaneSessionInfo] = [:]
+    @State private var foregroundProcessNames: [UUID: String] = [:]
     #endif
     @State private var trackedFocusedID: UUID?
 
@@ -93,6 +94,7 @@ struct KytosSessionsSidebar: View {
                         PaneLeafRow(
                             terminalID: leaf.id,
                             commandLine: leaf.commandLine,
+                            foregroundProcess: foregroundProcessNames[leaf.id],
                             sessionInfo: leaf.sessionID.flatMap { liveSessions[$0] },
                             isFocused: leaf.id == trackedFocusedID,
                             onFocus: {
@@ -129,6 +131,9 @@ struct KytosSessionsSidebar: View {
         .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
             Task { await refreshSessions() }
         }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            refreshProcessNames()
+        }
         .onReceive(Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()) { _ in
             trackedFocusedID = KytosTerminalManager.shared.activeTerminalID
         }
@@ -146,6 +151,18 @@ struct KytosSessionsSidebar: View {
         if case .success(let sessions) = result {
             liveSessions = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
         }
+    }
+
+    @MainActor
+    private func refreshProcessNames() {
+        let leaves = workspace.session.layout.allTerminalLeaves()
+        var updated: [UUID: String] = [:]
+        for leaf in leaves {
+            if let name = KytosTerminalManager.shared.foregroundProcessName(for: leaf.id) {
+                updated[leaf.id] = name
+            }
+        }
+        foregroundProcessNames = updated
     }
 
     private func killSession(_ id: String) {
@@ -179,6 +196,7 @@ struct KytosSessionsSidebar: View {
 private struct PaneLeafRow: View {
     let terminalID: UUID
     let commandLine: [String]?
+    let foregroundProcess: String?
     let sessionInfo: KytosPaneSessionInfo?
     let isFocused: Bool
     let onFocus: () -> Void
@@ -191,18 +209,24 @@ private struct PaneLeafRow: View {
         return URL(fileURLWithPath: cmd).lastPathComponent
     }
 
+    /// Primary label: foreground process when different from the shell, else shell name.
+    private var primaryLabel: String {
+        if let fp = foregroundProcess, !fp.isEmpty, fp != commandLabel { return fp }
+        return commandLabel
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             Circle()
                 .fill(sessionInfo?.isRunning == true ? Color.green : Color.secondary.opacity(0.5))
                 .frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 1) {
-                Text(commandLabel)
+                Text(primaryLabel)
                     .font(.system(size: 12))
                     .fontWeight(isFocused ? .semibold : .regular)
                     .lineLimit(1)
                 if let sid = sessionInfo?.id {
-                    Text("pane session \(sid)")
+                    Text(commandLabel == primaryLabel ? "pane session \(sid)" : "\(commandLabel) — \(sid)")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 } else {
@@ -520,8 +544,12 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
 
     private func updateTerminalAppearance(_ view: TerminalView) {
         let colorName = colorScheme == .dark ? "Kytos-dark" : "Kytos-light"
+        let colorFileLoaded: Bool
         if let url = Bundle.main.url(forResource: colorName, withExtension: "itermcolors") {
             loadITermColors(from: url, into: view)
+            colorFileLoaded = true
+        } else {
+            colorFileLoaded = false
         }
         view.font = settings.nsFont
         #if os(macOS)
@@ -534,7 +562,10 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
         default:               effectiveStyle = .steadyBlock
         }
         view.terminal.setCursorStyle(effectiveStyle)
-        view.terminal.ansi256PaletteStrategy = settings.ansi256Palette
+        // When a custom .itermcolors palette is loaded, default to base16Lab so the
+        // 240 extended xterm colors are mapped to perceptually match the 16-color palette.
+        // The user's explicit picker choice is respected only when no custom palette is active.
+        view.terminal.ansi256PaletteStrategy = colorFileLoaded ? .base16Lab : settings.ansi256Palette
         view.needsDisplay = true
         #else
         view.setNeedsDisplay()
@@ -873,6 +904,23 @@ class KytosTerminalManager {
             ? "~" + cwd.dropFirst(NSHomeDirectory().count)
             : cwd
         return display.isEmpty ? name : "\(name) — \(display)"
+    }
+
+    /// Returns the name of the foreground process for the given terminal UUID, or nil if unknown.
+    /// Suitable for polling from the navigator sidebar (reuses the same PID cache).
+    func foregroundProcessName(for terminalID: UUID) -> String? {
+        guard let sid = terminalSessionIDs[terminalID] else { return nil }
+        let shellPid: pid_t
+        if let cached = cachedSessionPIDs[sid] {
+            shellPid = cached
+        } else {
+            guard let info = (try? KytosPaneClient.shared.listSessions())?
+                    .first(where: { $0.id == sid }),
+                  let pid = info.processID else { return nil }
+            cachedSessionPIDs[sid] = pid_t(pid)
+            shellPid = pid_t(pid)
+        }
+        return kytosProcessForegroundName(shellPid)
     }
 
     private func kytosProcessCWD(_ pid: pid_t) -> String? {

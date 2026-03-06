@@ -20,18 +20,16 @@ The following table reflects work completed in the first implementation session.
 | C1 | `loadITermColors` called twice | ✅ Fixed | Direct call removed from `getOrCreateTerminal` |
 | C2 | `nativeBackgroundColor` reset on every refresh | ℹ️ Noted | No user-visible impact; left as-is |
 | C3 | Cursor blink not wired | ✅ Fixed | Blink combined with cursor style → `.blinking*` variants |
-| C4 | `ansi256PaletteStrategy` not exposed | ✅ Fixed | Setting added; picker in Settings → Terminal |
+| C4 | `ansi256PaletteStrategy` not exposed | ✅ Fixed | Setting added; picker in Settings → Terminal; auto-selects `.base16Lab` when `.itermcolors` palette is loaded |
 | D1 | 50-message loop limit in snapshot acquisition | ✅ Fixed | 500-message budget loop |
 | D2 | Silent failure on missing snapshot | ✅ Fixed | "Stream failed" overlay with Retry button |
 | D3 | App quit blocks on `readLoop` poll | ℹ️ Noted | Existing known issue; 500 ms max delay, acceptable |
-| D4 | Navigator process names not live | ⏳ Deferred | P2 — requires polling loop + `@Published` dict |
+| D4 | Navigator process names not live | ✅ Fixed | `foregroundProcessName(for:)` in `KytosTerminalManager`; 1s polling in `KytosSessionsSidebar`; `PaneLeafRow` shows foreground process as primary label |
 | D5 | Scrollback not restored from snapshots | ⏳ Deferred | P3 — requires Pane protocol patch |
 
 ### Remaining Work
 
-- **P2 — D4 / item 5b**: Live foreground process name in navigator — `@Published [UUID: String]` dict in `KytosTerminalManager`; polled from `KytosPanelViews`
-- **P3 — D5 / item 6a**: Scrollback in Pane snapshots — needs new Pane server patch
-- **P3 — item 6b**: Auto-select `.base16Lab` palette when custom `.itermcolors` is loaded
+- **P3 — D5 / item 6a**: Scrollback in Pane snapshots — needs new Pane server patch to transmit scrollback lines with snapshots
 
 ---
 
