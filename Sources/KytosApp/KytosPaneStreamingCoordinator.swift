@@ -170,7 +170,11 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
                 }
                 if response != nil && snapshot != nil { break }
             }
-            guard let snap = snapshot else { return }
+            guard let snap = snapshot else {
+                kLog("[KytosDebug][PaneStream] handleAttachResponse: no snapshot for session \(sessionID)")
+                self.notifyStreamFailed()
+                return
+            }
             finishAttach(conn: conn, tv: tv, snapshot: snap, earlyDeltas: earlyDeltas, cols: cols, rows: rows)
         } catch {
             kLog("[KytosDebug][PaneStream] handleAttachResponse error: \(error)")
@@ -206,6 +210,24 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
             conn.close()
         }
         connection = nil
+    }
+
+    /// Reconnects the stream using the last known dimensions and session ID.
+    /// Called by the "Retry" button in the stream-failed overlay.
+    func retry() {
+        guard !streaming, connection == nil else { return }
+        guard let tid = terminalID,
+              let sid = KytosTerminalManager.shared.sessionID(for: tid),
+              lastCols > 0, lastRows > 0 else {
+            // Fall back to forcing a layout pass — sizeChanged will reconnect.
+            DispatchQueue.main.async { [weak self] in
+                self?.terminalView?.needsLayout = true
+                self?.terminalView?.layoutSubtreeIfNeeded()
+            }
+            return
+        }
+        kLog("[KytosDebug][PaneStream] retry() — reconnecting session=\(sid) \(lastCols)x\(lastRows)")
+        startStream(sessionID: sid, cols: lastCols, rows: lastRows)
     }
 
     /// Posts `KytosStreamFailed` so the owning view can show a reconnecting overlay.

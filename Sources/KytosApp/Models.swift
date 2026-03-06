@@ -327,6 +327,8 @@ public final class KytosAppModel {
         let unclaimed = windows.filter { !claimedWindowIDs.contains($0.key) }
         if let (oldKey, existing) = unclaimed.first {
             kLog("[KytosDebug][AppModel]   → remapping \(oldKey.uuidString.prefix(8)) → \(windowID.uuidString.prefix(8)), session=\(existing.session.name)")
+            // Migrate panel-visibility UserDefaults from old window UUID to new one
+            Self.migratePanelDefaults(from: oldKey, to: windowID)
             // Batch remove+insert to trigger didSet only once
             var updated = windows
             updated.removeValue(forKey: oldKey)
@@ -369,6 +371,24 @@ public final class KytosAppModel {
             kLog("[KytosDebug][AppModel] save() FAILED: \(error)")
         }
         saveTabGroups()
+    }
+
+    /// Copies panel-visibility UserDefaults from one window UUID to another so that
+    /// navigator/inspector state survives window-ID remapping across launches.
+    private static func migratePanelDefaults(from oldID: UUID, to newID: UUID) {
+        let defaults = UserDefaults.standard
+        let oldPrefix = "me.jwintz.kytos.window.\(oldID.uuidString)"
+        let newPrefix = "me.jwintz.kytos.window.\(newID.uuidString)"
+        let suffixes = [".panel.navigatorVisible", ".panel.inspectorVisible", ".panel.utilityVisible"]
+        for suffix in suffixes {
+            let oldKey = oldPrefix + suffix
+            let newKey = newPrefix + suffix
+            if defaults.object(forKey: oldKey) != nil {
+                defaults.set(defaults.bool(forKey: oldKey), forKey: newKey)
+                defaults.removeObject(forKey: oldKey)
+            }
+        }
+        kLog("[KytosDebug][AppModel] Migrated panel defaults \(oldID.uuidString.prefix(8)) → \(newID.uuidString.prefix(8))")
     }
 
     /// Reads the live NSWindowTabGroup state and persists which UUIDs were tabbed together.

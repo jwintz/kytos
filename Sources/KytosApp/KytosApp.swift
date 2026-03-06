@@ -515,14 +515,15 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
     class Coordinator {
         /// KytosLayoutChanged observer token — removed in deinit to prevent stacking.
         var layoutObserver: NSObjectProtocol?
+        /// KytosRetryStream observer token — removed in deinit to prevent stacking.
+        var retryObserver: NSObjectProtocol?
         /// Hash of last-applied appearance settings; prevents redundant redraws.
         var lastSettingsHash: Int = 0
 
         deinit {
             #if os(macOS)
-            if let obs = layoutObserver {
-                NotificationCenter.default.removeObserver(obs)
-            }
+            if let obs = layoutObserver { NotificationCenter.default.removeObserver(obs) }
+            if let obs = retryObserver  { NotificationCenter.default.removeObserver(obs) }
             #endif
         }
     }
@@ -608,6 +609,22 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
                 tv.needsLayout = true
                 tv.layoutSubtreeIfNeeded()
             }
+        }
+
+        // KytosRetryStream: the stream-failed overlay calls this with the terminal UUID.
+        // Route it to the streaming coordinator's retry() method.
+        let tid = terminalID
+        context.coordinator.retryObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("KytosRetryStream"), object: nil, queue: .main
+        ) { [weak terminal] notification in
+            guard let failedID = notification.object as? UUID, failedID == tid else { return }
+            guard let coord = KytosTerminalManager.shared.coordinator(for: tid) as? KytosPaneStreamingCoordinator else {
+                // Fallback: force layout so sizeChanged can reconnect.
+                terminal?.needsLayout = true
+                terminal?.layoutSubtreeIfNeeded()
+                return
+            }
+            coord.retry()
         }
         return terminal
     }
@@ -864,6 +881,10 @@ class KytosTerminalManager {
         return terminals[id]
     }
 
+    func coordinator(for id: UUID) -> MacOSLocalProcessTerminalCoordinator? {
+        terminals[id]?.coordinator
+    }
+
     func removeTerminal(id: UUID) {
         terminals.removeValue(forKey: id)
         terminalSessionIDs.removeValue(forKey: id)
@@ -1064,9 +1085,9 @@ struct PaneWorkspaceTerminalView: View {
                     .multilineTextAlignment(.center)
                 Button("Retry") {
                     streamFailed = false
-                    // Trigger a reconnect by forcing a sizeChanged via layout invalidation.
                     NotificationCenter.default.post(
-                        name: NSNotification.Name("KytosLayoutChanged"), object: nil)
+                        name: NSNotification.Name("KytosRetryStream"),
+                        object: terminalID)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -1188,77 +1209,144 @@ struct PaneWorkspaceTerminalView: View {
 
 struct PaneLayoutTreeView: View {
     @Binding var layout: PaneLayoutTree
-    
+
+    @State private var splitRatio: CGFloat = 0.5
+    @State private var ratioLoaded: Bool = false
+
+    private static let coordSpace = "paneSplitContainer"
+
     var body: some View {
         switch layout {
         case .terminal(let id, let commandLine, let sessionID):
             PaneWorkspaceTerminalView(terminalID: id, commandLine: commandLine, paneSessionID: sessionID, layout: $layout)
-                .id(id)  // Preserve @State across layout mutations (e.g. paneSessionID written back)
+                .id(id)
         case .split(let axis, let left, let right):
-            let leftWeight = CGFloat(left.leafCount)
-            let rightWeight = CGFloat(right.leafCount)
-            let total = leftWeight + rightWeight
-            if axis == .horizontal {
-                GeometryReader { geo in
-                    let leftW = geo.size.width * leftWeight / total
-                    let rightW = geo.size.width * rightWeight / total
-                    HStack(spacing: 0) {
-                        PaneLayoutTreeView(layout: Binding(
-                            get: {
-                                if case .split(_, let l, _) = layout { return l }
-                                return layout
-                            },
-                            set: { updateLeft(to: $0) }
-                        ))
-                        .frame(width: leftW)
-                        Divider()
-                        PaneLayoutTreeView(layout: Binding(
-                            get: {
-                                if case .split(_, _, let r) = layout { return r }
-                                return layout
-                            },
-                            set: { updateRight(to: $0) }
-                        ))
-                        .frame(width: rightW)
-                    }
-                }
-            } else {
-                GeometryReader { geo in
-                    let leftH = geo.size.height * leftWeight / total
-                    let rightH = geo.size.height * rightWeight / total
-                    VStack(spacing: 0) {
-                        PaneLayoutTreeView(layout: Binding(
-                            get: {
-                                if case .split(_, let l, _) = layout { return l }
-                                return layout
-                            },
-                            set: { updateLeft(to: $0) }
-                        ))
-                        .frame(height: leftH)
-                        Divider()
-                        PaneLayoutTreeView(layout: Binding(
-                            get: {
-                                if case .split(_, _, let r) = layout { return r }
-                                return layout
-                            },
-                            set: { updateRight(to: $0) }
-                        ))
-                        .frame(height: rightH)
-                    }
+            let udKey = splitKey(left: left, right: right)
+            let defaultRatio: CGFloat = CGFloat(left.leafCount) / CGFloat(left.leafCount + right.leafCount)
+
+            PaneSplitLayout(axis: axis, ratio: splitRatio) {
+                PaneLayoutTreeView(layout: Binding(
+                    get: { if case .split(_, let l, _) = layout { return l }; return layout },
+                    set: { updateLeft(to: $0) }
+                ))
+                splitDivider(axis: axis, udKey: udKey)
+                PaneLayoutTreeView(layout: Binding(
+                    get: { if case .split(_, _, let r) = layout { return r }; return layout },
+                    set: { updateRight(to: $0) }
+                ))
+            }
+            .coordinateSpace(name: Self.coordSpace)
+            .background(GeometryReader { geo in
+                Color.clear.onAppear { containerWidth = geo.size.width; containerHeight = geo.size.height }
+                    .onChange(of: geo.size) { _, newSize in containerWidth = newSize.width; containerHeight = newSize.height }
+            })
+            .onAppear {
+                if !ratioLoaded {
+                    let stored = UserDefaults.standard.double(forKey: udKey)
+                    splitRatio = stored > 0.01 ? CGFloat(stored) : defaultRatio
+                    ratioLoaded = true
                 }
             }
         }
     }
-    
+
+    // MARK: - Divider
+
+    @ViewBuilder
+    private func splitDivider(axis: PaneLayoutTree.Axis, udKey: String) -> some View {
+        let drag = DragGesture(minimumDistance: 1, coordinateSpace: .named(Self.coordSpace))
+            .onChanged { value in
+                // Use value.location — absolute position in container — for linear, lag-free tracking.
+                if axis == .horizontal {
+                    // The container's coordinate space starts at 0,0 top-left.
+                    // We need the container width. GeometryReader would add a frame,
+                    // but we can read it from the Layout's proposal via a preference.
+                    splitRatio = max(0.10, min(0.90, value.location.x / max(1, containerWidth)))
+                } else {
+                    splitRatio = max(0.10, min(0.90, value.location.y / max(1, containerHeight)))
+                }
+            }
+            .onEnded { _ in
+                UserDefaults.standard.set(Double(splitRatio), forKey: udKey)
+            }
+
+        // 5px visible bar, 11px hit area
+        if axis == .horizontal {
+            Rectangle()
+                .fill(Color(NSColor.separatorColor))
+                .frame(width: 5)
+                .contentShape(Rectangle().size(width: 11, height: .infinity))
+                .gesture(drag)
+                .onHover { h in if h { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
+        } else {
+            Rectangle()
+                .fill(Color(NSColor.separatorColor))
+                .frame(height: 5)
+                .contentShape(Rectangle().size(width: .infinity, height: 11))
+                .gesture(drag)
+                .onHover { h in if h { NSCursor.resizeUpDown.push() } else { NSCursor.pop() } }
+        }
+    }
+
+    // Container size read from preference set by PaneSplitLayout helper.
+    @State private var containerWidth: CGFloat = 800
+    @State private var containerHeight: CGFloat = 600
+
+    // MARK: - Helpers
+
+    private func splitKey(left: PaneLayoutTree, right: PaneLayoutTree) -> String {
+        let l = left.firstLeafID()?.uuidString ?? "l"
+        let r = right.firstLeafID()?.uuidString ?? "r"
+        return "kytos.split.\(l).\(r)"
+    }
+
     private func updateLeft(to newLayout: PaneLayoutTree) {
         if case .split(let axis, _, let right) = layout {
             layout = .split(axis: axis, left: newLayout, right: right)
         }
     }
-    
+
     private func updateRight(to newLayout: PaneLayoutTree) {
         if case .split(let axis, let left, _) = layout {
             layout = .split(axis: axis, left: left, right: newLayout)
+        }
+    }
+}
+
+/// Custom Layout for binary pane splits. Reports `sizeThatFits` as the full proposal —
+/// no min-size pushback — preventing the NavigationSplitView constraint feedback loop
+/// (`_layoutSubtreeWithOldSize` recursion) and allowing the window to shrink freely.
+private struct PaneSplitLayout: Layout {
+    let axis: PaneLayoutTree.Axis
+    let ratio: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 3 else { return }
+        let dividerThick: CGFloat = 5
+        if axis == .horizontal {
+            let avail = max(0, bounds.width - dividerThick)
+            let leftW = max(40, min(avail - 40, avail * ratio))
+            let rightW = avail - leftW
+            subviews[0].place(at: bounds.origin,
+                              proposal: .init(width: leftW, height: bounds.height))
+            subviews[1].place(at: .init(x: bounds.minX + leftW, y: bounds.minY),
+                              proposal: .init(width: dividerThick, height: bounds.height))
+            subviews[2].place(at: .init(x: bounds.minX + leftW + dividerThick, y: bounds.minY),
+                              proposal: .init(width: rightW, height: bounds.height))
+        } else {
+            let avail = max(0, bounds.height - dividerThick)
+            let topH = max(40, min(avail - 40, avail * ratio))
+            let bottomH = avail - topH
+            subviews[0].place(at: bounds.origin,
+                              proposal: .init(width: bounds.width, height: topH))
+            subviews[1].place(at: .init(x: bounds.minX, y: bounds.minY + topH),
+                              proposal: .init(width: bounds.width, height: dividerThick))
+            subviews[2].place(at: .init(x: bounds.minX, y: bounds.minY + topH + dividerThick),
+                              proposal: .init(width: bounds.width, height: bottomH))
         }
     }
 }
@@ -1273,8 +1361,7 @@ struct PaneWorkspaceView: View {
 
         PaneLayoutTreeView(layout: $workspaceBindable.session.layout)
             .id(workspaceBindable.session.id)
-            .frame(maxWidth: .infinity)
-            .containerRelativeFrame(.vertical)
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosWorkspaceAction"))) { notification in
                 guard let userInfo = notification.userInfo,
                       let action = userInfo["action"] as? String,
@@ -1387,7 +1474,7 @@ struct KytosApp: App {
                         KytosTerminalManager.shared.adjustFontSize(for: id, delta: -1)
                     }
                     return nil
-                case 29: // ⌘0 — Reset font size (active pane)
+                case 15: // ⌘R — Reset font size (active pane)
                     if let id = KytosTerminalManager.shared.lastKnownActiveTerminalID {
                         KytosTerminalManager.shared.resetFontSize(for: id)
                     }
@@ -1410,11 +1497,16 @@ struct KytosApp: App {
             KytosAppModel.shared.save()
         }
 
-        // SIGTERM handler — willTerminateNotification doesn't fire for signals
+        // SIGTERM handler — willTerminateNotification doesn't fire for signals.
+        // Signal handlers must only call async-signal-safe functions; AppKit is not safe here.
+        // Use a pipe to wake the main run loop and perform the save there.
         signal(SIGTERM) { _ in
-            KytosTerminalManager.shared.disconnectAll()
-            KytosAppModel.shared.save()
-            _exit(0)
+            // Schedule cleanup on the main queue — safe from a signal handler.
+            DispatchQueue.main.async {
+                KytosTerminalManager.shared.disconnectAll()
+                KytosAppModel.shared.save()
+                _exit(0)
+            }
         }
         #endif
     }
@@ -1440,7 +1532,7 @@ struct KytosApp: App {
     private var mainWindowGroup: some Scene {
         #if os(macOS)
         WindowGroup("Kytos", id: "main", for: UUID.self) { $windowID in
-            KytosWindowView(windowID: $windowID, appModel: appModel, shellState: settingsShellState)
+            KytosWindowView(windowID: $windowID, appModel: appModel)
         }
         #else
         WindowGroup("Kytos") {
@@ -1452,6 +1544,7 @@ struct KytosApp: App {
                     navigatorTabs: KytosNavigatorTab.allCases,
                     inspectorTabs: KytosInspectorTab.allCases,
                     utilityTabs: KytosUtilityTab.allCases,
+                    scrollable: false,
                     settingsView: {
                         AnyView(KytosSettingsWindowView(shellState: settingsShellState))
                     },
@@ -1475,21 +1568,24 @@ struct KytosWindowView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.kelyphosKeybindingRegistry) private var registry
 
-    // Shared appearance state — same instance as the Settings window so changes are instant
-    var shellState: KelyphosShellState
+    /// Per-window shell state. Appearance keys share the app prefix (so Settings changes propagate
+    /// via kelyphosAppearanceDidChange notification); panel-visibility keys are scoped to this
+    /// window's UUID so toggling the navigator in one window doesn't affect others.
+    @State private var windowShellState: KelyphosShellState
     var appModel: KytosAppModel
 
-    // Per-window panel visibility via AppStorage, keyed by a short stable window index
-    @AppStorage("me.jwintz.kytos.panel.navigatorVisible") private var navigatorVisible = false
-    @AppStorage("me.jwintz.kytos.panel.inspectorVisible") private var inspectorVisible = false
-    @AppStorage("me.jwintz.kytos.panel.utilityVisible") private var utilityVisible = false
-
-    init(windowID: Binding<UUID?>, appModel: KytosAppModel, shellState: KelyphosShellState) {
+    init(windowID: Binding<UUID?>, appModel: KytosAppModel) {
         self._windowID = windowID
         let resolvedID = windowID.wrappedValue ?? UUID()
         self._stableID = State(initialValue: resolvedID)
         self.appModel = appModel
-        self.shellState = shellState
+        // windowShellState is initialized with a temporary prefix; it will be
+        // re-created in onAppear once the workspace (with its stable session ID)
+        // is available — see _createShellState(for:).
+        self._windowShellState = State(initialValue: KelyphosShellState(
+            persistencePrefix: "me.jwintz.kytos",
+            panelPrefix: "me.jwintz.kytos.tmp"
+        ))
         kLog("[KytosDebug][WindowView] init — windowID=\(windowID.wrappedValue?.uuidString.prefix(8) ?? "nil"), stableID=\(resolvedID.uuidString.prefix(8))")
     }
 
@@ -1504,13 +1600,20 @@ struct KytosWindowView: View {
             // Workspace removal is handled by the NSWindow.willCloseNotification observer below.
         }
         .onAppear {
-            // Restore persisted panel visibility into shellState
-            shellState.navigatorVisible = navigatorVisible
-            shellState.inspectorVisible = inspectorVisible
-            shellState.utilityAreaVisible = utilityVisible
             // Create workspace only here — onAppear fires for real windows, not speculative views
             if workspace == nil {
                 workspace = appModel.workspace(for: stableID)
+            }
+            // Re-create shell state keyed by the workspace's stable session ID.
+            // The session ID is persisted in the model and survives across launches,
+            // unlike the window UUID which may change on each relaunch.
+            if let ws = workspace {
+                let stablePrefix = "me.jwintz.kytos.session.\(ws.session.id.uuidString)"
+                windowShellState = KelyphosShellState(
+                    persistencePrefix: "me.jwintz.kytos",
+                    panelPrefix: stablePrefix
+                )
+                kLog("[KytosDebug][WindowView] Panel state keyed to session \(ws.session.id.uuidString.prefix(8))")
             }
             kLog("[KytosDebug][WindowView] onAppear — windowID=\(windowID?.uuidString.prefix(8) ?? "nil"), stableID=\(stableID.uuidString.prefix(8))")
             kLog("[KytosDebug][WindowView] workspace: session=\(workspace?.session.name ?? "nil"), totalWorkspaces=\(appModel.windows.count)")
@@ -1563,7 +1666,7 @@ struct KytosWindowView: View {
                     appModel.pruneOrphanedWorkspaces()
                 }
             }
-            shellState.title = "Kytos"
+            windowShellState.title = "Kytos"
             registry.register(category: "Workspace", label: "Split Horizontal", shortcut: "⌘D")
             registry.register(category: "Workspace", label: "Split Vertical", shortcut: "⇧⌘D")
             registry.register(category: "Workspace", label: "Close Pane", shortcut: "⌘W")
@@ -1579,11 +1682,12 @@ struct KytosWindowView: View {
     @ViewBuilder
     private func windowContent(workspace: KytosWorkspace) -> some View {
         KelyphosShellView(
-            state: shellState,
+            state: windowShellState,
             configuration: KelyphosShellConfiguration(
                 navigatorTabs: KytosNavigatorTab.allCases,
                 inspectorTabs: KytosInspectorTab.allCases,
                 utilityTabs: KytosUtilityTab.allCases,
+                scrollable: false,
                 detail: {
                     PaneWorkspaceView()
                 }
@@ -1594,25 +1698,25 @@ struct KytosWindowView: View {
         .background { WindowRegistrar(windowID: stableID) }
         #if os(macOS)
         .onReceive(Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()) { _ in
-            shellState.subtitle = KytosTerminalManager.shared.activePaneSubtitle()
+            windowShellState.subtitle = KytosTerminalManager.shared.activePaneSubtitle()
         }
         #endif
-        .onChange(of: shellState.navigatorVisible) { _, newVal in
+        .onChange(of: windowShellState.navigatorVisible) { _, _ in
             refocusActiveTerminal()
-            navigatorVisible = newVal
+            windowShellState.savePanelState()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 NotificationCenter.default.post(name: NSNotification.Name("KytosLayoutChanged"), object: nil)
             }
         }
-        .onChange(of: shellState.inspectorVisible) { _, newVal in
+        .onChange(of: windowShellState.inspectorVisible) { _, _ in
             refocusActiveTerminal()
-            inspectorVisible = newVal
+            windowShellState.savePanelState()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 NotificationCenter.default.post(name: NSNotification.Name("KytosLayoutChanged"), object: nil)
             }
         }
-        .onChange(of: shellState.utilityAreaVisible) { _, newVal in
-            utilityVisible = newVal
+        .onChange(of: windowShellState.utilityAreaVisible) { _, _ in
+            windowShellState.savePanelState()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 NotificationCenter.default.post(name: NSNotification.Name("KytosLayoutChanged"), object: nil)
             }
