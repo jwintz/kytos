@@ -27,9 +27,25 @@ The following table reflects work completed in the first implementation session.
 | D4 | Navigator process names not live | ✅ Fixed | `foregroundProcessName(for:)` in `KytosTerminalManager`; 1s polling in `KytosSessionsSidebar`; `PaneLeafRow` shows foreground process as primary label |
 | D5 | Scrollback not restored from snapshots | ✅ Fixed | New `0004-scrollback-in-snapshots.patch`; server sends up to 500 scrollback lines; client feeds them as plain output before the screen so SwiftTerm's scrollback ring is populated on reattach |
 
+### Session 3 — Stability & UX Fixes (2026-03-06)
+
+| ID | Finding | Status | Notes |
+|----|---------|--------|-------|
+| E1 | `NSGenericException` constraint loop on launch | ✅ Fixed | `.containerRelativeFrame(.vertical)` inside `NavigationSplitView` detail column created height feedback loop; replaced with `.frame(maxWidth: .infinity, maxHeight: .infinity)` |
+| E2 | SIGTERM signal handler called AppKit (unsafe) | ✅ Fixed | `disconnectAll()` + `save()` wrapped in `DispatchQueue.main.async` |
+| E3 | ⌘0 conflicted with Kelyphos shortcut | ✅ Fixed | Reset font size moved to ⌘R (keycode 15) |
+| E4 | Submodule URLs not pointing to forks | ✅ Fixed | `.gitmodules` + remotes updated to `https://github.com/jwintz/SwiftTerm.git` and `https://github.com/jwintz/Pane.git` |
+| E5 | "Stream failed" overlay not triggered on nil snapshot | ✅ Fixed | `notifyStreamFailed()` added to `handleAttachResponse` guard |
+| E6 | Retry button didn't actually reconnect | ✅ Fixed | Retry posts `KytosRetryStream`; coordinator `retry()` calls `startStream` with `lastCols`/`lastRows` directly |
+| E7 | Split panes not resizable (window size ratchet) | ✅ Fixed | `HSplitView`/`VSplitView` replaced with custom `PaneSplitLayout: Layout` which returns `proposal.replacingUnspecifiedDimensions()` — no min-size pushback; 5px divider with 11px hit area, proper resize cursor |
+| E8 | Split geometry not persisted | ✅ Fixed | Ratio stored in `UserDefaults` keyed by `kytos.split.<leftLeafID>.<rightLeafID>`; restored on `.onAppear`; drag uses `value.location` in named coordinate space for linear tracking |
+| E9 | Navigator/inspector panel state not persisted across relaunches | ✅ Fixed | Panel prefix changed from `window.<UUID>` (unstable) to `session.<UUID>` (stable, persisted in model); `KelyphosShellState` re-created in `onAppear` once workspace is available |
+
 ### Remaining Work
 
-All audit findings are resolved. No outstanding items.
+All audit findings are resolved. No outstanding items from prior sessions.
+
+**Next:** macOS desktop widget (`Kytos-Widget` target) showing live terminal stats.
 
 ---
 

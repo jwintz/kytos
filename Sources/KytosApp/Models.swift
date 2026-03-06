@@ -3,6 +3,7 @@ import SwiftUI
 import AppKit
 #endif
 import UniformTypeIdentifiers
+import WidgetKit
 
 public enum PaneLayoutTree: Codable, Hashable {
     case terminal(id: UUID, commandLine: [String]? = nil, paneSessionID: String? = nil)
@@ -371,6 +372,26 @@ public final class KytosAppModel {
             kLog("[KytosDebug][AppModel] save() FAILED: \(error)")
         }
         saveTabGroups()
+        writeWidgetSnapshot()
+    }
+
+    private func writeWidgetSnapshot() {
+        guard let defaults = UserDefaults(suiteName: KytosWidgetSnapshot.appGroupID) else { return }
+        let windowList = windows.values.map { workspace -> KytosWidgetWindow in
+            let leaves = workspace.session.layout.allTerminalLeaves()
+            let terminals = leaves.map { leaf -> KytosWidgetTerminal in
+                let process = KytosTerminalManager.shared.foregroundProcessName(for: leaf.id)
+                    ?? leaf.commandLine?.first
+                    ?? "zsh"
+                return KytosWidgetTerminal(id: leaf.id, process: process)
+            }
+            return KytosWidgetWindow(id: workspace.session.id, name: workspace.session.name, terminals: terminals)
+        }
+        let snapshot = KytosWidgetSnapshot(date: .now, windows: windowList)
+        if let data = try? JSONEncoder().encode(snapshot) {
+            defaults.set(data, forKey: KytosWidgetSnapshot.userDefaultsKey)
+        }
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     /// Copies panel-visibility UserDefaults from one window UUID to another so that

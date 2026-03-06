@@ -4,6 +4,9 @@ options:
   deploymentTarget:
     macOS: 26.0
     iOS: 26.0
+settings:
+  DEVELOPMENT_TEAM: H4T77W7K9A
+  CODE_SIGN_STYLE: Automatic
 packages:
   Kelyphos:
     path: ../kelyphos
@@ -18,6 +21,9 @@ targets:
     platform: macOS
     sources:
       - path: Sources/KytosApp
+      - path: Sources/KytosWidget/KytosWidgetSnapshot.swift
+      - path: Kytos-Default.icns
+        buildPhase: resources
     dependencies:
       - package: Kelyphos
         product: KelyphosKit
@@ -25,6 +31,9 @@ targets:
         product: pane
       - package: SwiftTerm
         product: SwiftTerm
+      - target: Kytos-Widget-macOS
+        embed: true
+        codeSign: true
     preBuildScripts:
       - name: Apply Pane Patches
         script: |
@@ -64,22 +73,48 @@ targets:
         NSPrincipalClass: NSApplication
         CFBundleName: Kytos
         CFBundleDisplayName: Kytos
+        CFBundleIconFile: Kytos-Default
+        CFBundleIconName: Kytos-Default
     settings:
       PRODUCT_NAME: Kytos
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos
+      ASSETCATALOG_COMPILER_APPICON_NAME: ""
     entitlements:
       path: Sources/KytosApp/Kytos.entitlements
+
+  Kytos-Widget-macOS:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Sources/KytosWidget
+    info:
+      path: Sources/KytosWidget/Info.plist
+      properties:
+        CFBundleName: KytosWidget
+        CFBundleDisplayName: Kytos Widget
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      PRODUCT_NAME: KytosWidget
+      PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos.KytosWidget
+      SKIP_INSTALL: YES
+    entitlements:
+      path: Sources/KytosWidget/KytosWidget.entitlements
 
   Kytos-iOS:
     type: application
     platform: iOS
     sources:
       - path: Sources/KytosApp
+      - path: Sources/KytosWidget/KytosWidgetSnapshot.swift
     dependencies:
       - package: Kelyphos
         product: KelyphosKit
       - package: SwiftTerm
         product: SwiftTerm
+      - target: Kytos-Widget-iOS
+        embed: true
+        codeSign: true
     postBuildScripts:
       - name: Build mksh
         script: |
@@ -101,3 +136,26 @@ targets:
     settings:
       PRODUCT_NAME: Kytos
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    entitlements:
+      path: Sources/KytosApp/Kytos.entitlements
+
+  Kytos-Widget-iOS:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/KytosWidget
+    info:
+      path: Sources/KytosWidget/Info.plist
+      properties:
+        CFBundleName: KytosWidget
+        CFBundleDisplayName: Kytos Widget
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      PRODUCT_NAME: KytosWidget
+      PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos.KytosWidget
+      SKIP_INSTALL: YES
+    entitlements:
+      path: Sources/KytosWidget/KytosWidget.entitlements
+
