@@ -4,3 +4,6 @@
 [submodule "Submodules/mksh"]
 	path = Submodules/mksh
 	url = https://github.com/MirBSD/mksh.git
+[submodule "Submodules/SwiftTerm"]
+	path = Submodules/SwiftTerm
+	url = https://github.com/migueldeicaza/SwiftTerm.git
