@@ -583,6 +583,9 @@ extension KytosPaneTerminalSnapshot {
     /// Scrollback lines are written first as plain output (each ending \r\n) so they
     /// push naturally into SwiftTerm's scrollback ring. The screen content follows,
     /// using absolute cursor positioning to overwrite in-place without a flash.
+    ///
+    /// Use this only on the **initial** attach for a terminal. For reconnects, use
+    /// `toANSIBytesScreenOnly()` to avoid duplicating the scrollback ring.
     func toANSIBytes() -> [UInt8] {
         var out: [UInt8] = []
         out.reserveCapacity((scrollbackLines.count + rows) * cols * 8)
@@ -591,8 +594,20 @@ extension KytosPaneTerminalSnapshot {
         if !scrollbackLines.isEmpty {
             var lastAttr: KytosPaneCellAttribute? = nil
             for line in scrollbackLines {
+                // Trim trailing space/empty cells so lines recorded at a wider
+                // terminal width don't wrap incorrectly in the current view.
+                var trimmedEnd = line.count
+                while trimmedEnd > 0 {
+                    let c = line[trimmedEnd - 1]
+                    let ch = c.char
+                    if (ch == " " || ch.isEmpty || ch == "\0") && c.width <= 1 {
+                        trimmedEnd -= 1
+                    } else {
+                        break
+                    }
+                }
                 var col = 0
-                for cell in line.prefix(cols) {
+                for cell in line.prefix(trimmedEnd) {
                     if cell.width == 0 { col += 1; continue }
                     if lastAttr != cell.attribute {
                         out.append(contentsOf: cell.attribute.sgrBytes())
@@ -609,7 +624,21 @@ extension KytosPaneTerminalSnapshot {
             }
         }
 
-        // --- Screen ---
+        out.append(contentsOf: screenANSIBytes())
+        return out
+    }
+
+    /// Converts only the visible screen portion to ANSI, skipping scrollback.
+    ///
+    /// Used on reconnects to refresh the visible area without adding duplicate lines
+    /// to SwiftTerm's scrollback ring (which already holds the initial-attach data).
+    func toANSIBytesScreenOnly() -> [UInt8] {
+        return screenANSIBytes()
+    }
+
+    private func screenANSIBytes() -> [UInt8] {
+        var out: [UInt8] = []
+        out.reserveCapacity(rows * cols * 8)
         var lastAttr: KytosPaneCellAttribute? = nil
         for (rowIdx, line) in lines.prefix(rows).enumerated() {
             // Move cursor to start of this row.

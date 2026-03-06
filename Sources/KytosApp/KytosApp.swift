@@ -1394,6 +1394,7 @@ struct PaneWorkspaceView: View {
                     #endif
                     if let newLayout = rootLayout.removing(id: id) {
                         workspaceBindable.session.layout = newLayout
+                        KytosAppModel.shared.save()
                         // Focus the nearest remaining pane so CMD+W doesn't accidentally close the window.
                         #if os(macOS)
                         if let focusID = newLayout.firstLeafID() {
@@ -1629,6 +1630,7 @@ struct KytosWindowView: View {
                       appModel.windowToID[ObjectIdentifier(window)] == id else { return }
                 kLog("[KytosDebug][WindowView] NSWindow.willClose — removing workspace for \(id.uuidString.prefix(8))")
                 appModel.windows.removeValue(forKey: id)
+                appModel.save()
             }
             if !appModel.hasRestoredWindows {
                 appModel.hasRestoredWindows = true

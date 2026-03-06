@@ -300,6 +300,17 @@ public final class KytosAppModel {
 
     private init() {
         load()
+        startWidgetRefreshTimer()
+    }
+
+    // MARK: - Widget Refresh Timer
+
+    @ObservationIgnored private var widgetRefreshTimer: Timer?
+
+    private func startWidgetRefreshTimer() {
+        widgetRefreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            self?.writeWidgetSnapshot()
+        }
     }
 
     /// Set of windowIDs that have been claimed by live windows in this session.
@@ -376,7 +387,6 @@ public final class KytosAppModel {
     }
 
     private func writeWidgetSnapshot() {
-        guard let defaults = UserDefaults(suiteName: KytosWidgetSnapshot.appGroupID) else { return }
         let windowList = windows.values.map { workspace -> KytosWidgetWindow in
             let leaves = workspace.session.layout.allTerminalLeaves()
             let terminals = leaves.map { leaf -> KytosWidgetTerminal in
@@ -388,9 +398,7 @@ public final class KytosAppModel {
             return KytosWidgetWindow(id: workspace.session.id, name: workspace.session.name, terminals: terminals)
         }
         let snapshot = KytosWidgetSnapshot(date: .now, windows: windowList)
-        if let data = try? JSONEncoder().encode(snapshot) {
-            defaults.set(data, forKey: KytosWidgetSnapshot.userDefaultsKey)
-        }
+        KytosWidgetSnapshot.write(snapshot)
         WidgetCenter.shared.reloadAllTimelines()
     }
 

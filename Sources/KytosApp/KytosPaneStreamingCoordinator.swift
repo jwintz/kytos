@@ -16,6 +16,10 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
     /// so it can be flushed once the stream is established.
     private var pendingResizeDuringAttach: (cols: Int, rows: Int)?
 
+    /// Tracks whether the initial snapshot (with scrollback) has been fed to the terminal.
+    /// On reconnects we only replay the visible screen, preserving the existing scrollback ring.
+    private var hasCompletedInitialAttach = false
+
     private let lock = NSLock()
     private var _connection: KytosPaneConnection?
     private var connection: KytosPaneConnection? {
@@ -183,8 +187,18 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
 
     private func finishAttach(conn: KytosPaneConnection, tv: TerminalView, snapshot: KytosPaneTerminalSnapshot, earlyDeltas: [[UInt8]], cols: Int, rows: Int) {
         self.connection = conn
-        let bytes = snapshot.toANSIBytes()
-        kLog("[KytosDebug][PaneStream] Feeding snapshot \(snapshot.cols)x\(snapshot.rows) (\(bytes.count) bytes, \(snapshot.lines.count) lines) to terminal")
+        // On the initial attach, feed the full snapshot including scrollback so the terminal
+        // ring is populated. On reconnects (e.g. after a stream drop), skip scrollback to
+        // avoid duplicating lines already in the ring — just replay the visible screen.
+        let bytes: [UInt8]
+        if hasCompletedInitialAttach {
+            bytes = snapshot.toANSIBytesScreenOnly()
+            kLog("[KytosDebug][PaneStream] Reconnect: feeding screen-only snapshot \(snapshot.cols)x\(snapshot.rows) (\(bytes.count) bytes)")
+        } else {
+            bytes = snapshot.toANSIBytes()
+            hasCompletedInitialAttach = true
+            kLog("[KytosDebug][PaneStream] Initial attach: feeding snapshot \(snapshot.cols)x\(snapshot.rows) (\(bytes.count) bytes, \(snapshot.scrollbackLines.count) scrollback lines)")
+        }
         DispatchQueue.main.async {
             tv.feed(byteArray: bytes[...])
             for delta in earlyDeltas {

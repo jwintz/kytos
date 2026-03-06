@@ -52,22 +52,30 @@ index a283f6d..92ef307 100644
  }
  
 diff --git a/Sources/pane/PaneTerminalSession.swift b/Sources/pane/PaneTerminalSession.swift
-index ad9ad74..7413274 100644
+index ad9ad74..465ea2d 100644
 --- a/Sources/pane/PaneTerminalSession.swift
 +++ b/Sources/pane/PaneTerminalSession.swift
-@@ -183,13 +183,26 @@ final class PaneTerminalSession: Terminal, LocalProcessDelegate {
+@@ -183,13 +183,32 @@ final class PaneTerminalSession: Terminal, LocalProcessDelegate {
          let lines = (0..<rows).map { row in
              buildLine(row: row)
          }
-+        // Collect up to 500 scrollback lines. `buffer.yDisp` equals yBase when the
-+        // server is not scrolled back (always true here), giving us the scrollback count.
-+        let scrollbackCount = min(buffer.yDisp, 500)
++        // Collect up to 500 scrollback lines.
++        // buffer.yBase counts lines pushed into scrollback (capped at scrollbackSize=500
++        // after which linesTop increments instead to track ring rotation).
++        // getScrollInvariantLine(row:) valid range is linesTop..(linesTop+lines.count-1),
++        // so the oldest surviving scrollback line is at absolute row `linesTop`,
++        // and newest scrollback is at `linesTop + yBase - 1`.
++        let (sbStart, sbCount) = getScrollbackInfo()
++        let scrollbackCount = min(sbCount, 500)
 +        var scrollbackLines: [[PaneCell]] = []
 +        if scrollbackCount > 0 {
 +            scrollbackLines.reserveCapacity(scrollbackCount)
-+            for row in (-scrollbackCount)..<0 {
-+                if let _ = getLine(row: row) {
-+                    scrollbackLines.append(buildLine(row: row))
++            // startIdx accounts for linesTop (ring rotation offset) so getScrollInvariantLine
++            // doesn't return nil after the scrollback ring fills past its 500-line capacity.
++            let startIdx = sbStart + (sbCount - scrollbackCount)
++            for i in 0..<scrollbackCount {
++                if let bufferLine = getScrollInvariantLine(row: startIdx + i) {
++                    scrollbackLines.append(buildLineFromBuffer(bufferLine))
 +                }
 +            }
 +        }
@@ -82,4 +90,27 @@ index ad9ad74..7413274 100644
 +            scrollbackLines: scrollbackLines
          )
      }
+ 
+@@ -227,4 +245,21 @@ final class PaneTerminalSession: Terminal, LocalProcessDelegate {
+         }
+         return cells
+     }
++
++    /// Builds a PaneCell array directly from a BufferLine (used for scrollback rows
++    /// which are not accessible via getCharData / getLine due to negative-row rejection).
++    private func buildLineFromBuffer(_ bufferLine: BufferLine) -> [PaneCell] {
++        var cells: [PaneCell] = []
++        cells.reserveCapacity(cols)
++        for col in 0..<cols {
++            let data = bufferLine[col]
++            let character = String(getCharacter(for: data))
++            cells.append(PaneCell(
++                char: character,
++                width: data.width,
++                attribute: PaneAttribute(data.attribute)
++            ))
++        }
++        return cells
++    }
+ }
  
