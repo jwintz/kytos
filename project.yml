@@ -74,7 +74,6 @@ targets:
         CFBundleName: Kytos
         CFBundleDisplayName: Kytos
         CFBundleIconFile: Kytos-Default
-        CFBundleIconName: Kytos-Default
     settings:
       PRODUCT_NAME: Kytos
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos
