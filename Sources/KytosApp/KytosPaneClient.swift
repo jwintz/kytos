@@ -90,6 +90,7 @@ struct KytosPaneTerminalDelta {
     let endY: Int
     let cursorX: Int
     let cursorY: Int
+    let scrolledLines: Int
     let lines: [[KytosPaneCell]]
 }
 
@@ -208,6 +209,7 @@ private struct BinaryReader {
         let endY = Int(try readUInt16())
         let cursorX = Int(try readUInt16())
         let cursorY = Int(try readUInt16())
+        let scrolledLines = Int(try readUInt16())
         let lineCount = Int(try readUInt16())
         var lines: [[KytosPaneCell]] = []
         lines.reserveCapacity(lineCount)
@@ -218,7 +220,7 @@ private struct BinaryReader {
             for _ in 0..<cellCount { try line.append(readCell()) }
             lines.append(line)
         }
-        return KytosPaneTerminalDelta(startY: startY, endY: endY, cursorX: cursorX, cursorY: cursorY, lines: lines)
+        return KytosPaneTerminalDelta(startY: startY, endY: endY, cursorX: cursorX, cursorY: cursorY, scrolledLines: scrolledLines, lines: lines)
     }
 }
 
@@ -622,6 +624,17 @@ extension KytosPaneTerminalSnapshot {
                 lastAttr = nil
                 out.appendAnsi("\r\n")
             }
+            // After emitting N scrollback lines via \r\n, the last min(rows-1, N) lines
+            // sit on the visible screen rather than in SwiftTerm's scrollback ring.
+            // screenANSIBytes() uses absolute cursor positioning and does NOT scroll,
+            // so those lines would be silently overwritten and lost.
+            // Emitting `rows - 1` bare newlines scrolls the visible area up exactly far
+            // enough to push every scrollback line into the ring (one fewer than `rows`
+            // because the final newline in the loop above already moved the cursor one
+            // row down from the last scrollback line).
+            for _ in 0..<(rows - 1) {
+                out.appendAnsi("\r\n")
+            }
         }
 
         out.append(contentsOf: screenANSIBytes())
@@ -668,11 +681,21 @@ extension KytosPaneTerminalSnapshot {
 extension KytosPaneTerminalDelta {
     /// Converts the delta to ANSI escape sequences for the affected rows.
     ///
-    /// Saves and restores the cursor so updates outside the cursor row don't
-    /// cause a visible cursor jump during the feed.
+    /// When the server reports that lines scrolled off the top (`scrolledLines > 0`),
+    /// we first move the cursor to the bottom of the screen and emit that many bare
+    /// newlines. This pushes existing top-of-screen content into SwiftTerm's scrollback
+    /// ring before the absolute-positioned delta overwrites the visible rows.
     func toANSIBytes() -> [UInt8] {
         var out: [UInt8] = []
         out.reserveCapacity(lines.count * 200)
+        // Inject scroll: push old top-of-screen lines into the scrollback ring.
+        if scrolledLines > 0 {
+            // Move cursor to last visible row so newlines trigger actual scrolling.
+            out.appendAnsi("\u{1b}[\(endY + 1);1H")
+            for _ in 0..<scrolledLines {
+                out.appendAnsi("\n")
+            }
+        }
         out.appendAnsi("\u{1b}[s")  // save cursor position
         for (offset, line) in lines.enumerated() {
             let row = startY + offset

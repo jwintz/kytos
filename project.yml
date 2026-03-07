@@ -101,6 +101,19 @@ targets:
     entitlements:
       path: Sources/KytosWidget/KytosWidget.entitlements
 
+  Kytos-Tests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Sources/KytosTests
+    dependencies:
+      - package: SwiftTerm
+        product: SwiftTerm
+    settings:
+      PRODUCT_NAME: KytosTests
+      PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.KytosTests
+      GENERATE_INFOPLIST_FILE: YES
+
   Kytos-iOS:
     type: application
     platform: iOS

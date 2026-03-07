@@ -70,6 +70,17 @@ private struct KytosTerminalSettingsTab: View {
                     Text("\(Int(settings.horizontalMargin)) px")
                         .frame(width: 40, alignment: .trailing)
                 }
+
+                HStack {
+                    Text("Scrollback Lines")
+                    Slider(value: Binding(
+                        get: { Double(settings.scrollbackSize) },
+                        set: { settings.scrollbackSize = Int($0) }
+                    ), in: 100...10000, step: 100)
+                    Text("\(settings.scrollbackSize)")
+                        .frame(width: 50, alignment: .trailing)
+                }
+                .help("Number of lines kept in the scrollback buffer. Changes apply to new terminal sessions.")
             }
 
             Section("Shell") {

@@ -771,6 +771,11 @@ class KytosTerminalManager {
         // Use .zero — SwiftUI layout delivers the real size before the first sizeChanged,
         // preventing a spurious 800×600 resize being sent to the pane server.
         let terminal = TerminalView(frame: .zero)
+        let scrollback = KytosSettings.shared.scrollbackSize
+        if terminal.terminal.options.scrollback != scrollback {
+            terminal.terminal.options.scrollback = scrollback
+            terminal.terminal.setup(isReset: false)
+        }
         #if os(macOS)
         terminal.autoresizingMask = [.width, .height]
         terminal.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -1494,6 +1499,7 @@ struct KytosApp: App {
             queue: .main
         ) { _ in
             kLog("[KytosDebug][App] willTerminate — disconnecting streams and saving state")
+            KytosAppModel.shared.isTerminating = true
             KytosTerminalManager.shared.disconnectAll()
             KytosAppModel.shared.save()
         }
@@ -1625,6 +1631,7 @@ struct KytosWindowView: View {
             // Remove workspace when the NSWindow actually closes (not just SwiftUI re-renders).
             let id = stableID
             NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { notification in
+                guard !appModel.isTerminating else { return }
                 guard let window = notification.object as? NSWindow,
                       !( window is NSPanel),
                       appModel.windowToID[ObjectIdentifier(window)] == id else { return }

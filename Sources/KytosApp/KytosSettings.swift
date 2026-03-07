@@ -22,6 +22,7 @@ public final class KytosSettings {
     private let shellChoiceKey = "kytos_shellChoice"
     private let horizontalMarginKey = "kytos_horizontalMargin"
     private let ansi256PaletteKey = "kytos_ansi256Palette"
+    private let scrollbackSizeKey = "kytos_scrollbackSize"
     
     // We bind properties manually to UserDefaults because @AppStorage isn't easily supported natively inside @Observable classes
     
@@ -71,6 +72,10 @@ public final class KytosSettings {
                 forKey: ansi256PaletteKey)
         }
     }
+
+    public var scrollbackSize: Int {
+        didSet { UserDefaults.standard.set(scrollbackSize, forKey: scrollbackSizeKey) }
+    }
     
     private init() {
         let defaults = UserDefaults.standard
@@ -83,7 +88,8 @@ public final class KytosSettings {
             fontSizeKey: 12.0,
             shellChoiceKey: ShellChoice.embeddedMksh.rawValue,
             horizontalMarginKey: 0.0,
-            ansi256PaletteKey: "xterm"
+            ansi256PaletteKey: "xterm",
+            scrollbackSizeKey: 500
         ])
 
         let styleRaw = defaults.string(forKey: cursorStyleKey) ?? "steadyBlock"
@@ -105,6 +111,9 @@ public final class KytosSettings {
 
         self.horizontalMargin = CGFloat(defaults.double(forKey: horizontalMarginKey))
         self.ansi256Palette = defaults.string(forKey: ansi256PaletteKey) == "base16Lab" ? .base16Lab : .xterm
+
+        let rawScrollback = defaults.integer(forKey: scrollbackSizeKey)
+        self.scrollbackSize = rawScrollback > 0 ? rawScrollback : 500
 
         print("[KytosDebug][Settings] init — cursorStyle=\(styleRaw), cursorBlink=\(cursorBlink), fontFamily=\(fontFamily), fontSize=\(fontSize), shellChoice=\(shellChoice.rawValue)")
         print("[KytosDebug][Settings] raw UserDefaults — cursorStyle=\(defaults.string(forKey: cursorStyleKey) ?? "nil"), fontFamily=\(defaults.string(forKey: fontFamilyKey) ?? "nil"), fontSize=\(defaults.double(forKey: fontSizeKey)), shellChoice=\(defaults.string(forKey: shellChoiceKey) ?? "nil")")

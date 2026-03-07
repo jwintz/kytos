@@ -317,6 +317,10 @@ public final class KytosAppModel {
     @ObservationIgnored private var claimedWindowIDs: Set<UUID> = []
     @ObservationIgnored public var hasRestoredWindows = false
 
+    /// Set by the willTerminate handler to prevent NSWindow.willClose from
+    /// removing workspaces and overwriting the saved state during shutdown.
+    @ObservationIgnored public var isTerminating = false
+
     // MARK: - Window → UUID mapping (populated at runtime by WindowRegistrar)
 
     /// Maps each live NSWindow's identity to its workspace UUID.

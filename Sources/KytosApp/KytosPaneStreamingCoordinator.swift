@@ -282,7 +282,12 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
     }
 
     override func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        guard newCols > 0, newRows > 0 else { return }
+        // SwiftUI can fire sizeChanged with a tiny probe size (e.g. 2×1) during the
+        // initial layout pass, before the view reaches its real dimensions. If we
+        // start the stream at that size the pane server resizes the live session to
+        // 2×1 before snapshotting, destroying any existing scrollback. Ignore any
+        // dimensions that couldn't represent a usable terminal.
+        guard newCols >= 10, newRows >= 2 else { return }
 
         // If we haven't connected yet and have a pending session, this first
         // sizeChanged gives us the real terminal dimensions — start the stream now.
