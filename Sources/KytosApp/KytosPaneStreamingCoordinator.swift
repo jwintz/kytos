@@ -275,19 +275,54 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
     // MARK: - Read Loop
 
     private func readLoop(conn: KytosPaneConnection, tv: TerminalView) {
+        var readError: Error?
         while true {
-            guard let msg = try? conn.readFullMessage() else { break }
-            if case .delta(let delta) = msg {
-                let rows = self.lastRows
-                let bytes = delta.toANSIBytes(terminalRows: rows)
-                DispatchQueue.main.async {
-                    tv.feed(byteArray: bytes[...])
+            do {
+                guard let msg = try conn.readFullMessage() else {
+                    kLog("[KytosDebug][PaneStream] readFullMessage returned nil (EOF or cancelled)")
+                    break
                 }
+                if case .delta(let delta) = msg {
+                    let rows = self.lastRows
+                    let bytes = delta.toANSIBytes(terminalRows: rows)
+                    DispatchQueue.main.async {
+                        tv.feed(byteArray: bytes[...])
+                    }
+                }
+            } catch {
+                readError = error
+                break
             }
         }
-        kLog("[KytosDebug][PaneStream] Stream ended for terminal \(terminalID?.uuidString.prefix(8) ?? "?")")
+        let tid = terminalID?.uuidString.prefix(8) ?? "?"
+        if let err = readError {
+            kLog("[KytosDebug][PaneStream] Stream error for terminal \(tid): \(err)")
+        } else {
+            kLog("[KytosDebug][PaneStream] Stream ended for terminal \(tid)")
+        }
         connection = nil
-        // Don't remove terminal from manager — the view can reconnect on next sizeChanged.
+
+        // Auto-reconnect unless the disconnect was intentional (cancelled).
+        guard !conn.cancelled else {
+            kLog("[KytosDebug][PaneStream] Stream cancelled for \(tid), not reconnecting")
+            return
+        }
+        guard let termID = terminalID,
+              let sid = KytosTerminalManager.shared.sessionID(for: termID),
+              lastCols > 0, lastRows > 0 else {
+            kLog("[KytosDebug][PaneStream] Cannot auto-reconnect \(tid) — missing session info")
+            return
+        }
+        // Backoff reconnect on readQueue (we're already on it).
+        for attempt in 0..<5 {
+            let delay = UInt32(500_000 * min(attempt + 1, 3)) // 500ms–1.5s
+            usleep(delay)
+            guard !conn.cancelled else { return }
+            kLog("[KytosDebug][PaneStream] Auto-reconnect attempt \(attempt) for \(tid) session=\(sid)")
+            streaming = false
+            startStream(sessionID: sid, cols: lastCols, rows: lastRows)
+            return  // startStream dispatches to readQueue again
+        }
     }
 
     // MARK: - TerminalViewDelegate overrides

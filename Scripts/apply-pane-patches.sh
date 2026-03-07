@@ -45,8 +45,14 @@ else
     if git apply --check "$PATCH" 2>/dev/null; then
       git apply "$PATCH"
       echo "  applied   $NAME"
+    elif git apply --reverse --check "$PATCH" 2>/dev/null; then
+      echo "  skipped   $NAME (already applied)"
     else
-      echo "  skipped   $NAME (already applied or conflicts)"
+      # Partially applied or conflicts — reset and re-apply.
+      echo "  resetting $NAME (partial apply detected)"
+      git checkout -- .
+      git apply "$PATCH"
+      echo "  applied   $NAME (after reset)"
     fi
   done
 fi
