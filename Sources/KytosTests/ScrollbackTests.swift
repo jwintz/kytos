@@ -244,3 +244,148 @@ struct ScrollbackFlushTests {
         }
     }
 }
+
+// MARK: - Delta scrollback tests
+
+/// Replicates the delta `toANSIBytes(terminalRows:)` approach:
+/// 1. ESC[2J + ESC[H — clear screen and go home
+/// 2. Write each scrolledOff line + \r\n
+/// 3. ESC[rows;1H + min(N, rows-1) newlines — flush into ring
+/// 4. Positioned screen content
+private func buildDeltaScrollANSI(scrolledOffLines: [Line], screenLines: [Line], rows: Int, cols: Int) -> [UInt8] {
+    var out: [UInt8] = []
+    let N = scrolledOffLines.count
+    if N > 0 {
+        out.append(contentsOf: "\u{1b}[2J\u{1b}[H".utf8)
+        for line in scrolledOffLines {
+            var trimmedEnd = line.count
+            while trimmedEnd > 0 {
+                let c = line[trimmedEnd - 1]
+                if (c.char == " " || c.char.isEmpty || c.char == "\0") && c.width <= 1 {
+                    trimmedEnd -= 1
+                } else { break }
+            }
+            for cell in line.prefix(trimmedEnd) {
+                if cell.width == 0 { continue }
+                let ch = cell.char.isEmpty || cell.char == "\0" ? " " : cell.char
+                out.append(contentsOf: ch.utf8)
+            }
+            out.append(contentsOf: "\r\n".utf8)
+        }
+        let flushCount = min(N, rows - 1)
+        out.append(contentsOf: "\u{1b}[\(rows);1H".utf8)
+        for _ in 0..<flushCount {
+            out.append(contentsOf: "\n".utf8)
+        }
+    }
+    // Positioned screen content
+    for (i, line) in screenLines.enumerated() {
+        out.append(contentsOf: "\u{1b}[\(i + 1);1H\u{1b}[2K".utf8)
+        for cell in line {
+            if cell.width == 0 { continue }
+            let ch = cell.char.isEmpty || cell.char == "\0" ? " " : cell.char
+            out.append(contentsOf: ch.utf8)
+        }
+    }
+    return out
+}
+
+@Suite("Delta scroll injection")
+struct DeltaScrollTests {
+
+    /// Few scrolled-off lines (< rows): all pushed into ring, no blank lines.
+    @Test func deltaFewScrolledOffLines() {
+        let rows = 5
+        let scrolledOff = ["alpha", "beta"].map { t in t.map { Cell(char: String($0), width: 1) } }
+        let screen = (0..<rows).map { i in "scr\(i)".map { Cell(char: String($0), width: 1) } }
+
+        let ansi = buildDeltaScrollANSI(scrolledOffLines: scrolledOff, screenLines: screen, rows: rows, cols: 80)
+        let terminal = makeTerminal(rows: rows)
+        // Pre-fill screen so it has content before the delta
+        terminal.feed(buffer: Array("A\r\nB\r\nC\r\nD\r\nE".utf8)[...])
+        terminal.feed(buffer: ansi[...])
+
+        let (start, count) = terminal.getScrollbackInfo()
+        #expect(count == 2, "Expected 2 scrollback lines, got \(count)")
+        #expect(scrollbackLineText(terminal, absoluteRow: start) == "alpha")
+        #expect(scrollbackLineText(terminal, absoluteRow: start + 1) == "beta")
+    }
+
+    /// Exactly rows scrolled-off lines: all pushed into ring.
+    @Test func deltaExactlyRowsScrolledOff() {
+        let rows = 5
+        let scrolledOff = (0..<rows).map { i in "line\(i)".map { Cell(char: String($0), width: 1) } }
+        let screen = (0..<rows).map { i in "scr\(i)".map { Cell(char: String($0), width: 1) } }
+
+        let ansi = buildDeltaScrollANSI(scrolledOffLines: scrolledOff, screenLines: screen, rows: rows, cols: 80)
+        let terminal = makeTerminal(rows: rows)
+        terminal.feed(buffer: Array("A\r\nB\r\nC\r\nD\r\nE".utf8)[...])
+        terminal.feed(buffer: ansi[...])
+
+        let (start, count) = terminal.getScrollbackInfo()
+        #expect(count == rows, "Expected \(rows) scrollback lines, got \(count)")
+        for i in 0..<rows {
+            #expect(scrollbackLineText(terminal, absoluteRow: start + i) == "line\(i)")
+        }
+    }
+
+    /// Many scrolled-off lines (> rows): all pushed into ring.
+    @Test func deltaManyScrolledOffLines() {
+        let rows = 5
+        let N = 12
+        let scrolledOff = (0..<N).map { i in "off\(i)".map { Cell(char: String($0), width: 1) } }
+        let screen = (0..<rows).map { i in "scr\(i)".map { Cell(char: String($0), width: 1) } }
+
+        let ansi = buildDeltaScrollANSI(scrolledOffLines: scrolledOff, screenLines: screen, rows: rows, cols: 80)
+        let terminal = makeTerminal(rows: rows, scrollback: 500)
+        terminal.feed(buffer: Array("A\r\nB\r\nC\r\nD\r\nE".utf8)[...])
+        terminal.feed(buffer: ansi[...])
+
+        let (start, count) = terminal.getScrollbackInfo()
+        #expect(count == N, "Expected \(N) scrollback lines, got \(count)")
+        for i in 0..<N {
+            #expect(scrollbackLineText(terminal, absoluteRow: start + i) == "off\(i)")
+        }
+    }
+
+    /// No scrolled-off lines: ring stays unchanged.
+    @Test func deltaNoScrolledOffLines() {
+        let rows = 5
+        let screen = (0..<rows).map { i in "scr\(i)".map { Cell(char: String($0), width: 1) } }
+
+        let ansi = buildDeltaScrollANSI(scrolledOffLines: [], screenLines: screen, rows: rows, cols: 80)
+        let terminal = makeTerminal(rows: rows)
+        terminal.feed(buffer: ansi[...])
+
+        let (_, count) = terminal.getScrollbackInfo()
+        #expect(count == 0, "No scrolled lines means no scrollback, got \(count)")
+    }
+
+    /// Screen content is correctly positioned after scroll injection.
+    @Test func deltaScreenContentCorrectAfterScroll() {
+        let rows = 5
+        let scrolledOff = ["x", "y", "z"].map { t in t.map { Cell(char: String($0), width: 1) } }
+        let screenText = ["Hello", "World", "Test!", "Line4", "Line5"]
+        let screen = screenText.map { t in t.map { Cell(char: String($0), width: 1) } }
+
+        let ansi = buildDeltaScrollANSI(scrolledOffLines: scrolledOff, screenLines: screen, rows: rows, cols: 80)
+        let terminal = makeTerminal(cols: 80, rows: rows)
+        terminal.feed(buffer: Array("AAAAA\r\nBBBBB\r\nCCCCC\r\nDDDDD\r\nEEEEE".utf8)[...])
+        terminal.feed(buffer: ansi[...])
+
+        // Check visible screen content
+        let (sbStart, sbCount) = terminal.getScrollbackInfo()
+        #expect(sbCount == 3)
+        for i in 0..<rows {
+            guard let line = terminal.getScrollInvariantLine(row: sbStart + sbCount + i) else {
+                Issue.record("Could not get screen line \(i)")
+                continue
+            }
+            var text = ""
+            for j in 0..<min(screenText[i].count, line.count) {
+                text.append(terminal.getCharacter(for: line[j]))
+            }
+            #expect(text == screenText[i], "Screen row \(i): expected '\(screenText[i])', got '\(text)'")
+        }
+    }
+}

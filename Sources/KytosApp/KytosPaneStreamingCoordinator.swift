@@ -32,6 +32,13 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
         get { lock.withLock { _streaming } }
         set { lock.withLock { _streaming = newValue } }
     }
+    /// Monotonically increasing counter. Incremented by `disconnect()` so that a
+    /// stale readQueue `defer` block does not clear `streaming` for a newer stream.
+    private var _streamGen: Int = 0
+    private var streamGen: Int {
+        get { lock.withLock { _streamGen } }
+        set { lock.withLock { _streamGen = newValue } }
+    }
     private let readQueue = DispatchQueue(label: "kytos.pane.stream.read", qos: .userInitiated)
     private let writeQueue = DispatchQueue(label: "kytos.pane.stream.write", qos: .userInteractive)
 
@@ -50,11 +57,17 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
             return
         }
         streaming = true
+        let gen = streamGen
         kLog("[KytosDebug][PaneStream] startStream session=\(sessionID) cols=\(cols) rows=\(rows)")
 
         readQueue.async { [weak self] in
             guard let self else { return }
-            defer { self.streaming = false }
+            defer {
+                // Only clear `streaming` if no disconnect() invalidated this generation.
+                if self.streamGen == gen {
+                    self.streaming = false
+                }
+            }
 
             var effectiveID = sessionID
 
@@ -126,7 +139,7 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
                         snapshot = snap
                         kLog("[KytosDebug][PaneStream] got snapshot \(snap.cols)x\(snap.rows), \(snap.lines.count) lines")
                     case .delta(let delta):
-                        earlyDeltas.append(delta.toANSIBytes())
+                        earlyDeltas.append(delta.toANSIBytes(terminalRows: rows))
                         kLog("[KytosDebug][PaneStream] got early delta")
                     case .other:
                         kLog("[KytosDebug][PaneStream] got .other message")
@@ -169,7 +182,7 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
                     snapshot = snap
                     kLog("[KytosDebug][PaneStream] got snapshot \(snap.cols)x\(snap.rows), \(snap.lines.count) lines")
                 case .delta(let delta):
-                    earlyDeltas.append(delta.toANSIBytes())
+                    earlyDeltas.append(delta.toANSIBytes(terminalRows: rows))
                 case .other: break
                 }
                 if response != nil && snapshot != nil { break }
@@ -187,22 +200,25 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
 
     private func finishAttach(conn: KytosPaneConnection, tv: TerminalView, snapshot: KytosPaneTerminalSnapshot, earlyDeltas: [[UInt8]], cols: Int, rows: Int) {
         self.connection = conn
-        // On the initial attach, feed the full snapshot including scrollback so the terminal
-        // ring is populated. On reconnects (e.g. after a stream drop), skip scrollback to
-        // avoid duplicating lines already in the ring — just replay the visible screen.
-        let bytes: [UInt8]
+        let bytes = snapshot.toANSIBytes()
         if hasCompletedInitialAttach {
-            bytes = snapshot.toANSIBytesScreenOnly()
-            kLog("[KytosDebug][PaneStream] Reconnect: feeding screen-only snapshot \(snapshot.cols)x\(snapshot.rows) (\(bytes.count) bytes)")
+            // Reconnect (e.g. after resize): clear stale scrollback before feeding fresh snapshot.
+            kLog("[KytosDebug][PaneStream] Reconnect: resetting scrollback, feeding full snapshot \(snapshot.cols)x\(snapshot.rows) (\(bytes.count) bytes, \(snapshot.scrollbackLines.count) scrollback lines)")
+            DispatchQueue.main.async {
+                tv.terminal.resetToInitialState()
+                tv.feed(byteArray: bytes[...])
+                for delta in earlyDeltas {
+                    tv.feed(byteArray: delta[...])
+                }
+            }
         } else {
-            bytes = snapshot.toANSIBytes()
             hasCompletedInitialAttach = true
             kLog("[KytosDebug][PaneStream] Initial attach: feeding snapshot \(snapshot.cols)x\(snapshot.rows) (\(bytes.count) bytes, \(snapshot.scrollbackLines.count) scrollback lines)")
-        }
-        DispatchQueue.main.async {
-            tv.feed(byteArray: bytes[...])
-            for delta in earlyDeltas {
-                tv.feed(byteArray: delta[...])
+            DispatchQueue.main.async {
+                tv.feed(byteArray: bytes[...])
+                for delta in earlyDeltas {
+                    tv.feed(byteArray: delta[...])
+                }
             }
         }
         // Inform the server of the real terminal size; it will SIGWINCH the shell.
@@ -218,12 +234,14 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
 
     /// Close the streaming connection, breaking the blocking readLoop.
     func disconnect() {
+        streamGen += 1  // Invalidate the old readQueue defer
         if let conn = connection {
             conn.cancelled = true       // Tell poll-based readExact to exit
             conn.shutdownSocket()       // Wake any blocked poll/read
             conn.close()
         }
         connection = nil
+        streaming = false              // Allow immediate reconnection
     }
 
     /// Reconnects the stream using the last known dimensions and session ID.
@@ -260,7 +278,8 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
         while true {
             guard let msg = try? conn.readFullMessage() else { break }
             if case .delta(let delta) = msg {
-                let bytes = delta.toANSIBytes()
+                let rows = self.lastRows
+                let bytes = delta.toANSIBytes(terminalRows: rows)
                 DispatchQueue.main.async {
                     tv.feed(byteArray: bytes[...])
                 }
@@ -323,10 +342,17 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
               newCols != lastCols || newRows != lastRows else { return }
         lastCols = newCols
         lastRows = newRows
-        // Dispatch socket write off the main thread to prevent UI freezes.
-        let conn = connection
-        writeQueue.async {
-            try? conn?.sendBinaryResize(cols: newCols, rows: newRows)
+        // Disconnect and restart the stream so we get a fresh snapshot with
+        // properly reflowed scrollback at the new dimensions.
+        if let sid = terminalID.flatMap({ KytosTerminalManager.shared.sessionID(for: $0) }) {
+            kLog("[KytosDebug][PaneStream] sizeChanged: reconnecting for resize \(newCols)x\(newRows)")
+            disconnect()
+            startStream(sessionID: sid, cols: newCols, rows: newRows)
+        } else {
+            let conn = connection
+            writeQueue.async {
+                try? conn?.sendBinaryResize(cols: newCols, rows: newRows)
+            }
         }
     }
 

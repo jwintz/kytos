@@ -842,7 +842,27 @@ class KytosTerminalManager {
                 KytosTerminalManager.shared.recordFocus(id: requestedID)
                 kLog("[KytosDebug][Focus]   → makeFirstResponder called, now firstResponder=\(terminal.window?.firstResponder === terminal)")
             } else {
-                kLog("[KytosDebug][Focus]   → NO WINDOW, cannot focus")
+                kLog("[KytosDebug][Focus]   → NO WINDOW, will retry")
+                // Retry with increasing delays until the terminal is in a window
+                func retryFocus(attempt: Int) {
+                    let delays: [Double] = [0.1, 0.2, 0.4, 0.8]
+                    guard attempt < delays.count else {
+                        kLog("[KytosDebug][Focus]   → gave up after \(attempt) retries for \(requestedID.uuidString.prefix(8))")
+                        return
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delays[attempt]) { [weak terminal] in
+                        guard let terminal = terminal else { return }
+                        if let window = terminal.window {
+                            window.makeFirstResponder(terminal)
+                            KytosTerminalManager.shared.recordFocus(id: requestedID)
+                            kLog("[KytosDebug][Focus]   → retry \(attempt) succeeded for \(requestedID.uuidString.prefix(8))")
+                        } else {
+                            kLog("[KytosDebug][Focus]   → retry \(attempt) no window for \(requestedID.uuidString.prefix(8))")
+                            retryFocus(attempt: attempt + 1)
+                        }
+                    }
+                }
+                retryFocus(attempt: 0)
             }
         }
 
@@ -1403,7 +1423,7 @@ struct PaneWorkspaceView: View {
                         // Focus the nearest remaining pane so CMD+W doesn't accidentally close the window.
                         #if os(macOS)
                         if let focusID = newLayout.firstLeafID() {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                                 NotificationCenter.default.post(name: NSNotification.Name("KytosRequestFocus"), object: focusID)
                             }
                         }

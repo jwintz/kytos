@@ -90,7 +90,7 @@ struct KytosPaneTerminalDelta {
     let endY: Int
     let cursorX: Int
     let cursorY: Int
-    let scrolledLines: Int
+    let scrolledOffLines: [[KytosPaneCell]]
     let lines: [[KytosPaneCell]]
 }
 
@@ -209,7 +209,16 @@ private struct BinaryReader {
         let endY = Int(try readUInt16())
         let cursorX = Int(try readUInt16())
         let cursorY = Int(try readUInt16())
-        let scrolledLines = Int(try readUInt16())
+        let scrolledCount = Int(try readUInt16())
+        var scrolledOffLines: [[KytosPaneCell]] = []
+        scrolledOffLines.reserveCapacity(scrolledCount)
+        for _ in 0..<scrolledCount {
+            let cellCount = Int(try readUInt16())
+            var line: [KytosPaneCell] = []
+            line.reserveCapacity(cellCount)
+            for _ in 0..<cellCount { try line.append(readCell()) }
+            scrolledOffLines.append(line)
+        }
         let lineCount = Int(try readUInt16())
         var lines: [[KytosPaneCell]] = []
         lines.reserveCapacity(lineCount)
@@ -220,7 +229,7 @@ private struct BinaryReader {
             for _ in 0..<cellCount { try line.append(readCell()) }
             lines.append(line)
         }
-        return KytosPaneTerminalDelta(startY: startY, endY: endY, cursorX: cursorX, cursorY: cursorY, scrolledLines: scrolledLines, lines: lines)
+        return KytosPaneTerminalDelta(startY: startY, endY: endY, cursorX: cursorX, cursorY: cursorY, scrolledOffLines: scrolledOffLines, lines: lines)
     }
 }
 
@@ -681,32 +690,59 @@ extension KytosPaneTerminalSnapshot {
 extension KytosPaneTerminalDelta {
     /// Converts the delta to ANSI escape sequences for the affected rows.
     ///
-    /// When the server reports that lines scrolled off the top (`scrolledLines > 0`),
-    /// we first move the cursor to the bottom of the screen and emit that many bare
-    /// newlines. This pushes existing top-of-screen content into SwiftTerm's scrollback
-    /// ring before the absolute-positioned delta overwrites the visible rows.
-    func toANSIBytes() -> [UInt8] {
+    /// When the server reports lines that scrolled off the top, those lines are
+    /// emitted using a clear-write-flush approach:
+    /// 1. Clear the visible screen (ring unaffected)
+    /// 2. Write all scrolled-off lines from home with `\r\n`
+    /// 3. Flush them into the ring with exactly the right number of newlines
+    /// 4. Apply positioned screen content from the delta
+    func toANSIBytes(terminalRows: Int) -> [UInt8] {
         var out: [UInt8] = []
-        out.reserveCapacity(lines.count * 200)
-        // Inject scroll: push old top-of-screen lines into the scrollback ring.
-        if scrolledLines > 0 {
-            // Move cursor to last visible row so newlines trigger actual scrolling.
-            out.appendAnsi("\u{1b}[\(endY + 1);1H")
-            for _ in 0..<scrolledLines {
+        out.reserveCapacity((scrolledOffLines.count + lines.count) * 200)
+
+        let N = scrolledOffLines.count
+        if N > 0 {
+            // Clear visible area (doesn't touch ring) and position cursor at home.
+            out.appendAnsi("\u{1b}[2J\u{1b}[H")
+            var lastAttr: KytosPaneCellAttribute? = nil
+            for line in scrolledOffLines {
+                var trimmedEnd = line.count
+                while trimmedEnd > 0 {
+                    let c = line[trimmedEnd - 1]
+                    if (c.char == " " || c.char.isEmpty || c.char == "\0") && c.width <= 1 {
+                        trimmedEnd -= 1
+                    } else { break }
+                }
+                for cell in line.prefix(trimmedEnd) {
+                    if cell.width == 0 { continue }
+                    if lastAttr != cell.attribute {
+                        out.append(contentsOf: cell.attribute.sgrBytes())
+                        lastAttr = cell.attribute
+                    }
+                    let ch = cell.char.isEmpty || cell.char == "\0" ? " " : cell.char
+                    out.append(contentsOf: ch.utf8)
+                }
+                out.appendAnsi("\u{1b}[0m\r\n")
+                lastAttr = nil
+            }
+            // Flush scrolled-off lines into the ring. For N < rows, push exactly N
+            // lines (avoiding blank lines in ring). For N >= rows, natural scrolling
+            // already pushed N-rows+1 lines; flush the remaining rows-1.
+            let flushCount = min(N, terminalRows - 1)
+            out.appendAnsi("\u{1b}[\(terminalRows);1H")
+            for _ in 0..<flushCount {
                 out.appendAnsi("\n")
             }
         }
+
         out.appendAnsi("\u{1b}[s")  // save cursor position
         for (offset, line) in lines.enumerated() {
             let row = startY + offset
             guard row <= endY else { break }
-            // Move to start of row and erase the entire line before writing.
             out.appendAnsi("\u{1b}[\(row + 1);1H\u{1b}[2K")
             var lastAttr: KytosPaneCellAttribute? = nil
             for cell in line {
-                // Skip spacer cells following wide characters.
                 if cell.width == 0 { continue }
-                // Only emit SGR when the attribute changes.
                 if lastAttr != cell.attribute {
                     out.append(contentsOf: cell.attribute.sgrBytes())
                     lastAttr = cell.attribute
