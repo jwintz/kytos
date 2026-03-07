@@ -1,0 +1,23 @@
+diff --git a/Sources/SwiftTerm/Terminal.swift b/Sources/SwiftTerm/Terminal.swift
+index b01d6a4..52bfea1 100644
+--- a/Sources/SwiftTerm/Terminal.swift
++++ b/Sources/SwiftTerm/Terminal.swift
+@@ -5001,6 +5001,18 @@ open class Terminal {
+     public func getTopVisibleRow() -> Int {
+         return buffer.yDisp
+     }
++
++    /// Returns the start absolute row and count for the current scrollback history.
++    ///
++    /// - `start`: the absolute row index of the oldest surviving scrollback line,
++    ///   suitable for use as the `row` argument of `getScrollInvariantLine(row:)`.
++    /// - `count`: number of lines currently in scrollback (always ≤ the configured scrollback size).
++    ///
++    /// The newest scrollback line is at absolute row `start + count - 1`.
++    /// Visible screen row 0 is at `start + count`.
++    public func getScrollbackInfo() -> (start: Int, count: Int) {
++        return (buffer.linesTop, buffer.yBase)
++    }
+     
+     // ESC c Full Reset (RIS)
+     /// This performs a full reset of the terminal, like a soft reset, but additionally resets the buffer conents and scroll area.

@@ -1,58 +1,63 @@
 #!/usr/bin/env bash
 # apply-pane-patches.sh
-# Applies Kytos-local patches to the Pane submodule.
-# Safe to run repeatedly — already-applied patches are skipped via git apply --check.
+# Applies Kytos-local patches to Pane and SwiftTerm submodules.
+# Safe to run repeatedly — already-applied patches are skipped.
 #
 # Usage:
-#   Scripts/apply-pane-patches.sh            # apply all Patches/Pane/*.patch
-#   Scripts/apply-pane-patches.sh --reverse  # revert all patches (clean submodule)
+#   Scripts/apply-pane-patches.sh            # apply all patches
+#   Scripts/apply-pane-patches.sh --reverse  # revert all patches
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SUBMODULE_DIR="$REPO_ROOT/Submodules/Pane"
-PATCH_DIR="$REPO_ROOT/Patches/Pane"
 REVERSE="${1:-}"
 
-if [ ! -d "$SUBMODULE_DIR/.git" ] && [ ! -f "$SUBMODULE_DIR/.git" ]; then
-  echo "error: Pane submodule not initialised. Run: git submodule update --init" >&2
-  exit 1
-fi
+apply_patches() {
+  local submodule_dir="$1"
+  local patch_dir="$2"
+  local name="$(basename "$submodule_dir")"
 
-cd "$SUBMODULE_DIR"
+  if [ ! -d "$submodule_dir/.git" ] && [ ! -f "$submodule_dir/.git" ]; then
+    echo "warning: $name submodule not initialised, skipping" >&2
+    return
+  fi
 
-PATCHES=( $(ls "$PATCH_DIR"/*.patch 2>/dev/null | sort) )
-if [ ${#PATCHES[@]} -eq 0 ]; then
-  echo "No patches found in $PATCH_DIR"
-  exit 0
-fi
+  local patches=( $(ls "$patch_dir"/*.patch 2>/dev/null | sort) )
+  if [ ${#patches[@]} -eq 0 ]; then
+    return
+  fi
 
-if [ "$REVERSE" = "--reverse" ]; then
-  # Revert in reverse order
-  for (( i=${#PATCHES[@]}-1; i>=0; i-- )); do
-    PATCH="${PATCHES[$i]}"
-    NAME="$(basename "$PATCH")"
-    if git apply --reverse --check "$PATCH" 2>/dev/null; then
-      git apply --reverse "$PATCH"
-      echo "  reverted  $NAME"
-    else
-      echo "  skipped   $NAME (not applied)"
-    fi
-  done
-else
-  for PATCH in "${PATCHES[@]}"; do
-    NAME="$(basename "$PATCH")"
-    if git apply --check "$PATCH" 2>/dev/null; then
-      git apply "$PATCH"
-      echo "  applied   $NAME"
-    elif git apply --reverse --check "$PATCH" 2>/dev/null; then
-      echo "  skipped   $NAME (already applied)"
-    else
-      # Partially applied or conflicts — reset and re-apply.
-      echo "  resetting $NAME (partial apply detected)"
-      git checkout -- .
-      git apply "$PATCH"
-      echo "  applied   $NAME (after reset)"
-    fi
-  done
-fi
+  cd "$submodule_dir"
+  echo "[$name]"
+
+  if [ "$REVERSE" = "--reverse" ]; then
+    for (( i=${#patches[@]}-1; i>=0; i-- )); do
+      local patch="${patches[$i]}"
+      local pname="$(basename "$patch")"
+      if git apply --reverse --check "$patch" 2>/dev/null; then
+        git apply --reverse "$patch"
+        echo "  reverted  $pname"
+      else
+        echo "  skipped   $pname (not applied)"
+      fi
+    done
+  else
+    for patch in "${patches[@]}"; do
+      local pname="$(basename "$patch")"
+      if git apply --check "$patch" 2>/dev/null; then
+        git apply "$patch"
+        echo "  applied   $pname"
+      elif git apply --reverse --check "$patch" 2>/dev/null; then
+        echo "  skipped   $pname (already applied)"
+      else
+        echo "  resetting $pname (partial apply detected)"
+        git checkout -- .
+        git apply "$patch"
+        echo "  applied   $pname (after reset)"
+      fi
+    done
+  fi
+}
+
+apply_patches "$REPO_ROOT/Submodules/SwiftTerm" "$REPO_ROOT/Patches/SwiftTerm"
+apply_patches "$REPO_ROOT/Submodules/Pane" "$REPO_ROOT/Patches/Pane"
