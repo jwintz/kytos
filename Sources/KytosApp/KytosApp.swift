@@ -836,12 +836,12 @@ class KytosTerminalManager {
                   let requestedID = notification.object as? UUID,
                   requestedID == coordinator.terminalID else { return }
             let hasWindow = terminal.window != nil
-            let isFirstResponder = terminal.window?.firstResponder === terminal
-            kLog("[KytosDebug][Focus] KytosRequestFocus for \(requestedID.uuidString.prefix(8)) — hasWindow=\(hasWindow), isFirstResponder=\(isFirstResponder)")
-            if hasWindow {
-                terminal.window?.makeFirstResponder(terminal)
+            kLog("[KytosDebug][Focus] KytosRequestFocus for \(requestedID.uuidString.prefix(8)) — hasWindow=\(hasWindow)")
+            if let window = terminal.window {
+                window.makeKeyAndOrderFront(nil)
+                window.makeFirstResponder(terminal)
                 KytosTerminalManager.shared.recordFocus(id: requestedID)
-                kLog("[KytosDebug][Focus]   → makeFirstResponder called, now firstResponder=\(terminal.window?.firstResponder === terminal)")
+                kLog("[KytosDebug][Focus]   → makeFirstResponder called, firstResponder=\(window.firstResponder === terminal)")
             } else {
                 kLog("[KytosDebug][Focus]   → NO WINDOW, will retry")
                 // Retry with increasing delays until the terminal is in a window
@@ -854,6 +854,7 @@ class KytosTerminalManager {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delays[attempt]) { [weak terminal] in
                         guard let terminal = terminal else { return }
                         if let window = terminal.window {
+                            window.makeKeyAndOrderFront(nil)
                             window.makeFirstResponder(terminal)
                             KytosTerminalManager.shared.recordFocus(id: requestedID)
                             kLog("[KytosDebug][Focus]   → retry \(attempt) succeeded for \(requestedID.uuidString.prefix(8))")
@@ -867,33 +868,53 @@ class KytosTerminalManager {
             }
         }
 
-        // Focus when loaded — retry if the terminal isn't in a window yet
+        // Focus when loaded — use window.didBecomeKeyNotification to avoid
+        // timing races with window readiness (see DIAGNOSIS.md).
         let termIDForLog = id
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak terminal] in
-            guard let terminal = terminal else {
-                kLog("[KytosDebug][Focus] Initial focus for \(termIDForLog.uuidString.prefix(8)) — terminal deallocated")
-                return
-            }
-            let hasWindow = terminal.window != nil
-            kLog("[KytosDebug][Focus] Initial focus for \(termIDForLog.uuidString.prefix(8)) — hasWindow=\(hasWindow)")
-            if let window = terminal.window {
-                window.makeFirstResponder(terminal)
-                KytosTerminalManager.shared.recordFocus(id: termIDForLog)
-                kLog("[KytosDebug][Focus]   → makeFirstResponder called, now firstResponder=\(window.firstResponder === terminal)")
-            } else {
-                kLog("[KytosDebug][Focus]   → NO WINDOW at 0.15s, retrying at 0.35s")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak terminal] in
-                    guard let terminal = terminal else { return }
-                    let hasWindow2 = terminal.window != nil
-                    kLog("[KytosDebug][Focus] Retry focus for \(termIDForLog.uuidString.prefix(8)) — hasWindow=\(hasWindow2)")
-                    if let window = terminal.window {
-                        window.makeFirstResponder(terminal)
-                        KytosTerminalManager.shared.recordFocus(id: termIDForLog)
-                        kLog("[KytosDebug][Focus]   → retry makeFirstResponder, now firstResponder=\(window.firstResponder === terminal)")
-                    } else {
-                        kLog("[KytosDebug][Focus]   → STILL NO WINDOW at 0.35s!")
-                    }
+        var becameKeyObserver: NSObjectProtocol?
+        
+        func applyInitialFocus(_ terminal: TerminalView) {
+            guard let window = terminal.window else { return }
+            window.makeKeyAndOrderFront(nil)
+            window.makeFirstResponder(terminal)
+            KytosTerminalManager.shared.recordFocus(id: termIDForLog)
+            kLog("[KytosDebug][Focus] Initial focus for \(termIDForLog.uuidString.prefix(8)) — firstResponder=\(window.firstResponder === terminal)")
+        }
+        
+        // Try immediately if window is already available
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak terminal] in
+            guard let terminal = terminal else { return }
+            if terminal.window != nil {
+                applyInitialFocus(terminal)
+                if let obs = becameKeyObserver {
+                    NotificationCenter.default.removeObserver(obs)
+                    becameKeyObserver = nil
                 }
+            }
+        }
+        
+        // Also listen for window becoming key (handles the case where window
+        // isn't ready yet when the terminal is created).
+        becameKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+        ) { [weak terminal] notification in
+            guard let terminal = terminal,
+                  let window = notification.object as? NSWindow,
+                  terminal.window === window else { return }
+            applyInitialFocus(terminal)
+            // Only need this once
+            if let obs = becameKeyObserver {
+                NotificationCenter.default.removeObserver(obs)
+                becameKeyObserver = nil
+            }
+        }
+        
+        // Safety: remove observer if terminal is deallocated before window becomes key
+        // (the observer captures terminal weakly so it will just bail out)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+            if let obs = becameKeyObserver {
+                NotificationCenter.default.removeObserver(obs)
+                becameKeyObserver = nil
             }
         }
         #endif
@@ -1502,6 +1523,11 @@ struct KytosApp: App {
 
     init() {
         #if os(macOS)
+        // Ensure the app comes to the front when launched (e.g. via `open -W`).
+        DispatchQueue.main.async {
+            NSApplication.shared.activate()
+        }
+
         // Enable native macOS window tabbing BEFORE any windows are created
         // This gives us Cmd+T → new tab, "Show Tab Bar", "Show All Tabs"
         NSWindow.allowsAutomaticWindowTabbing = true
