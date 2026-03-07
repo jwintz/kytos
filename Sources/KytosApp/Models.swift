@@ -458,6 +458,9 @@ public final class KytosAppModel {
         kLog("[KytosDebug][AppModel] load()")
         guard let data = UserDefaults.standard.data(forKey: "KytosAppModel_Windows_v5") else {
             kLog("[KytosDebug][AppModel] load() — no saved data")
+            #if os(macOS)
+            signalReconciliationDone()
+            #endif
             return
         }
         do {
