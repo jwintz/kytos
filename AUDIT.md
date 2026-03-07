@@ -326,3 +326,102 @@ Kytos is a SwiftUI terminal app wrapping **SwiftTerm** for rendering and **Pane*
 3. **P1:** 3a (blink), 3b (deduplicate), 4a, 4b, 4c — robustness
 4. **P2:** 5a, 5b — navigator quality of life
 5. **P3:** 6a, 6b, 6c — nice to have
+
+---
+
+## iTerm2 Architecture Comparison
+
+Reference codebase: `~/Syntropment/iTerm2`. This section documents how iTerm2 solves the same problems Kytos has encountered (scrollback, resize, split focus, session restore) and identifies architectural gaps.
+
+### Scrollback Buffer
+
+| Aspect | iTerm2 | Kytos |
+|--------|--------|-------|
+| **Data structure** | Block-based linked list: `LineBuffer` → `iTermLineBlockArray` → `LineBlock` (8 KB fixed-size segments). Grows from tail, shrinks from head when limit exceeded. Not a ring buffer. | SwiftTerm's built-in circular ring buffer (`CircularList<BufferLine>`). Fixed capacity set at creation via `terminal.options.scrollback`. |
+| **Line storage** | Each line carries metadata (marks, annotations, EOL type: hard/soft/DWC). Lines are width-independent — wrapping computed on-demand per current terminal width. | Lines stored as `BufferLine` arrays of `CharData` cells. Width is baked in at creation time; no on-demand rewrap. |
+| **Limit enforcement** | `dropExcessLinesWithWidth:` removes entire blocks from head; tracks `num_dropped_blocks` for consistent absolute addressing. Supports unlimited scrollback. | Ring overwrites oldest entries when capacity reached. No block-level management. |
+| **Scroll position tracking** | `numberOfScrollbackLines` returns wrapped-line count for current width. `PTYScrollView` (NSScrollView subclass) uses document height = scrollback + screen rows. Scrollbar knob auto-sized by AppKit. | Kytos manually tracks `canScroll` via `buffer.yBase > 0` and `lines.count > rows`. Scrollbar relies on SwiftTerm's internal scroll position. |
+
+**Key insight:** iTerm2 stores lines width-independently so resize can rewrap without data loss. SwiftTerm bakes width at write time, making post-hoc reflow impossible without a full re-feed from the server.
+
+### Scroll Wheel Handling
+
+| Aspect | iTerm2 | Kytos |
+|--------|--------|-------|
+| **Accumulator** | `iTermScrollAccumulator` — accumulates fractional deltas from trackpad; mouse wheel gets immediate integer responses. Applies sensitivity multiplier and acceleration. Handles direction changes with hysteresis. | Relies entirely on SwiftTerm's built-in NSScrollView scroll handling. No custom accumulator or sensitivity control. |
+| **State machine** | `iTermScrollWheelStateMachine` — distinguishes trackpad vs. mouse, handles momentum scrolling, prevents scroll-through at document edges. | None. |
+| **User-scroll detection** | `PTYScrollView.detectUserScroll` tracks whether user has scrolled away from bottom; suppresses auto-scroll to bottom during output until user explicitly scrolls back down. | No user-scroll detection. SwiftTerm auto-scrolls to bottom on new output regardless of user position. |
+
+**Key insight:** iTerm2's scroll accumulator and user-scroll detection prevent the jarring "snap to bottom" behavior. Kytos should at minimum track whether the user has scrolled up and suppress auto-scroll during active scrollback viewing.
+
+### Resize & Reflow
+
+| Aspect | iTerm2 | Kytos |
+|--------|--------|-------|
+| **Reflow algorithm** | `VT100ScreenMutableState+Resizing.m` — sophisticated content-aware reflow. Pushes/pulls lines between screen and scrollback. Selection coordinates converted via `LineBufferPosition` absolute tracking. Interval tree (marks/annotations) coordinates updated. | No reflow. On resize, Kytos disconnects from the pane server and reconnects with a full snapshot at the new size. Scrollback is cleared via `resetToInitialState()` and re-fed from server. |
+| **Height shrink** | Saves `MAX(usedHeight, newHeight)` lines; excess screen content pushed to scrollback. Cursor stays at correct relative position. | Server handles resize via SIGWINCH on the underlying PTY. Client gets a fresh snapshot, losing client-side scrollback history. |
+| **Height grow** | Pulls only previously-pushed lines back from scrollback (doesn't inflate with unrelated history). Blank lines added at bottom. | Fresh snapshot; prior scrollback not carried over (must scroll up to see history). |
+| **Debouncing** | `WinSizeController.swift` — queue-based batching with 200 ms minimum between TIOCSWINSZ ioctls. Deduplication of pending requests. "Jiggle" mechanism (width+1, then restore) forces SIGWINCH even when size hasn't changed. | `sizeChanged` guard (≥10 cols, ≥2 rows) filters layout probe artifacts. No time-based debouncing; no ioctl coalescing. Resize during attach buffered via `pendingResizeDuringAttach`. |
+
+**Key insight:** Kytos's disconnect-reconnect approach to resize is expensive and loses client-side scrollback. A time-based debounce (≥200 ms between resize ioctls) would reduce unnecessary disconnects during window dragging. Longer term, implementing server-side scrollback persistence across reconnects would prevent history loss.
+
+### Split Pane Architecture
+
+| Aspect | iTerm2 | Kytos |
+|--------|--------|-------|
+| **View hierarchy** | `PTYSplitView` (NSSplitView subclass) → recursive tree of `SessionView` (leaf) or nested `PTYSplitView`. All AppKit, no SwiftUI. | `PaneLayoutTree` enum (`.terminal` / `.split`) rendered recursively by `PaneLayoutTreeView`. Custom `PaneSplitLayout: Layout` (SwiftUI Layout protocol). |
+| **Split creation** | `PTYTab.splitVertically:before:newSession:targetSession:` — three cases depending on existing children count and orientation match. Resizes siblings equally. All synchronous. | SwiftUI binding update via `$layout` mutation. Layout rebuilt on next body evaluation. Coordinator reused via `getOrCreateTerminal(id:)`. |
+| **Coordinate space** | NSSplitView handles all coordinate translation natively. | Custom coordinate space (`PaneSplitLayout`) with manual ratio tracking. |
+
+**Gap:** SwiftUI's lazy body evaluation means split geometry isn't settled until the next layout pass, causing a race where the old pane sees the full-window size before the split divider appears. iTerm2 doesn't have this problem because NSSplitView subview insertion and resize happen synchronously within the same run-loop tick.
+
+### Focus Management
+
+| Aspect | iTerm2 | Kytos |
+|--------|--------|-------|
+| **Active session tracking** | `PTYTab.activeSession` (weak property). Single source of truth per tab. All focus changes flow through `setActiveSession:`. | `lastKnownActiveTerminalID` latched by 0.1 s polling timer. No single authoritative "active" property. |
+| **First responder** | `[window makeFirstResponder:[session mainResponder]]` called from `setActiveSession:`. Only fires if tab is current (prevents invisible textview issues). | `KytosRequestFocus` notification → `makeFirstResponder` with exponential backoff retry (0.1, 0.2, 0.4, 0.8 s). |
+| **Focus on split** | New pane gets focus (unless focus-follows-mouse is enabled). Immediate, synchronous. | Focus request posted via `NotificationCenter` after layout binding update. Retry needed because SwiftUI view may not exist yet. |
+| **Focus on close** | `nearestNeighborOfSession:` — prefers left/above sibling; if sibling is a split, recursively descends to first leaf. Then `setActiveSession:`. | `firstLeafID()` of remaining layout tree. 0.15 s delay before focus post. |
+| **Visual feedback** | `iTermActivePaneBorderView` — colored border on active pane; 50% alpha when window not key. All sessions updated when active changes. | No visual active-pane indicator. |
+| **Keyboard routing** | OS delivers to first responder (`PTYTextView`). Only active session is first responder. Inactive sessions never receive key events. | `send(source:data:)` silently drops keystrokes when `connection == nil` (during attach handshake). No explicit guard against sending to wrong session. |
+
+**Key insight:** iTerm2 never uses timers or retries for focus. Focus transfer is synchronous because the view hierarchy is fully materialized (AppKit). Kytos's retry-with-backoff is a workaround for SwiftUI's deferred view creation. The real fix would be to ensure the terminal NSView is created before posting the focus request, or to use an AppKit-level responder chain rather than fighting SwiftUI's timing.
+
+**Missing in Kytos:** Active pane border indicator. Users currently have no visual cue which split pane has keyboard focus.
+
+### Session State Restoration
+
+| Aspect | iTerm2 | Kytos |
+|--------|--------|-------|
+| **Storage** | SQLite database or plist in `~/Library/Application Support/iTerm2/SavedState/`. Two backends (`iTermRestorableStateSQLite` / `iTermRestorableStateSaver`). | `UserDefaults` via `KytosAppModel.save()`. JSON-encoded workspace array. |
+| **Persisted state** | Grid size, screen content/history snapshot, working directory, session GUID, variables, tmux state. Window frame, type, desired rows/columns. | Layout tree (split structure + pane session IDs + command lines), panel states, split ratios. No screen content or scrollback persisted client-side. |
+| **Save trigger** | `applicationWillTerminate:` calls `saveSynchronously()`. Incremental saves during normal operation. | `applicationWillTerminate` → `save()`. `NSWindow.willClose` also calls `save()` (race fixed with `isTerminating` flag). |
+| **Restore flow** | `iTermRestorableStateController.restoreWindowsWithCompletion:` → sequential window creation → session content restoration from saved buffer. | `KytosAppModel.load()` on launch → re-creates layout tree → coordinators attach to pane server → server provides fresh snapshot. |
+| **Content on restore** | Full screen + scrollback content restored from saved state. Terminal appears exactly as left. | Content comes from pane server's live state. If pane daemon was killed, terminal starts fresh. |
+
+**Gap:** Kytos depends entirely on the pane daemon surviving between launches for content continuity. If the daemon dies (or is killed by `pixi run run`), all terminal history is lost. iTerm2 persists content independently. A lightweight improvement: persist the last N scrollback lines client-side alongside the layout tree.
+
+### Update/Rendering Cadence
+
+| Aspect | iTerm2 | Kytos |
+|--------|--------|-------|
+| **Frame rate** | 120 FPS update scheduler — batches all terminal changes into 8.3 ms frames. Never updates more frequently. | No explicit frame batching. SwiftTerm's `feed()` triggers immediate display updates. Delta streaming drives update frequency. |
+| **Batching** | Screen mutations are batched; display refreshed once per frame. Copy-on-write sharing between mutable state and display state prevents tearing. | Each binary delta is decoded and fed immediately. No coalescing of rapid consecutive deltas. |
+| **Deallocation** | Off-main-thread cleanup via GCD for old scrollback blocks. | Inline deallocation on main thread. |
+
+### Actionable Improvements for Kytos
+
+Based on the iTerm2 comparison, these are the highest-impact architectural improvements:
+
+1. **Resize debounce (P0):** Add ≥200 ms time-based debounce to `sizeChanged` before sending resize to server. Prevents excessive disconnect/reconnect cycles during window dragging.
+
+2. **User-scroll detection (P0):** Track whether user has scrolled up from bottom. Suppress auto-scroll on new output while user is reviewing scrollback. Restore auto-scroll when user scrolls back to bottom.
+
+3. **Synchronous focus transfer (P1):** Instead of post-notification-with-retry, use `DispatchQueue.main.async` after the SwiftUI layout pass to call `makeFirstResponder` exactly once. Alternatively, track pending focus in the coordinator and apply it in `makeNSView`/`updateNSView`.
+
+4. **Delta coalescing (P1):** If multiple deltas arrive within one frame (8-16 ms), merge them and feed only the last one. Reduces redundant SwiftTerm redraws.
+
+5. **Client-side scrollback persistence (P2):** Save last N lines of scrollback to disk alongside layout tree. Restore on relaunch even if pane daemon was restarted.
+
+6. **Resize debounce for SIGWINCH (P2):** Queue resize ioctls with deduplication, similar to iTerm2's `WinSizeController`. Prevents child processes from receiving bursts of SIGWINCH during live resize.

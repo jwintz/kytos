@@ -771,11 +771,8 @@ class KytosTerminalManager {
         // Use .zero — SwiftUI layout delivers the real size before the first sizeChanged,
         // preventing a spurious 800×600 resize being sent to the pane server.
         let terminal = TerminalView(frame: .zero)
-        let scrollback = KytosSettings.shared.scrollbackSize
-        if terminal.terminal.options.scrollback != scrollback {
-            terminal.terminal.options.scrollback = scrollback
-            terminal.terminal.setup(isReset: false)
-        }
+        // NOTE: scrollback is applied later in sizeChanged (after setupOptions runs)
+        // because setupOptions creates fresh TerminalOptions with default scrollback.
         #if os(macOS)
         terminal.autoresizingMask = [.width, .height]
         terminal.setContentHuggingPriority(.defaultLow, for: .horizontal)

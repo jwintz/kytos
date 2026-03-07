@@ -98,6 +98,7 @@ targets:
       PRODUCT_NAME: KytosWidget
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos.KytosWidget
       SKIP_INSTALL: YES
+      ENABLE_APP_SANDBOX: YES
     entitlements:
       path: Sources/KytosWidget/KytosWidget.entitlements
 
@@ -169,6 +170,7 @@ targets:
       PRODUCT_NAME: KytosWidget
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos.KytosWidget
       SKIP_INSTALL: YES
+      ENABLE_APP_SANDBOX: YES
     entitlements:
       path: Sources/KytosWidget/KytosWidget.entitlements
 

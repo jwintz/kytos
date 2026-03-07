@@ -314,6 +314,13 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
             pendingSessionID = nil
             lastCols = newCols
             lastRows = newRows
+            // Apply scrollback setting now — setupOptions already ran and may have
+            // reset it to the default (500). changeScrollback is safe post-layout.
+            let scrollback = KytosSettings.shared.scrollbackSize
+            if source.terminal.options.scrollback != scrollback {
+                source.terminal.changeScrollback(scrollback)
+                kLog("[KytosDebug][PaneStream] Applied scrollback setting: \(scrollback)")
+            }
             kLog("[KytosDebug][PaneStream] sizeChanged triggering startStream for pending session \(sid), \(newCols)x\(newRows)")
             startStream(sessionID: sid, cols: newCols, rows: newRows)
             return
