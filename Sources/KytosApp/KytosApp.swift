@@ -103,7 +103,13 @@ struct KytosSessionsSidebar: View {
                                     object: leaf.id
                                 )
                             },
-                            onKill: leaf.sessionID.map { sid in { killSession(sid) } }
+                            onKill: {
+                                NotificationCenter.default.post(
+                                    name: NSNotification.Name("KytosWorkspaceAction"),
+                                    object: nil,
+                                    userInfo: ["action": "closePane", "id": leaf.id]
+                                )
+                            }
                         )
                     }
                 }
@@ -200,7 +206,7 @@ private struct PaneLeafRow: View {
     let sessionInfo: KytosPaneSessionInfo?
     let isFocused: Bool
     let onFocus: () -> Void
-    let onKill: (() -> Void)?
+    let onKill: () -> Void
     @State private var isHovered = false
 
     /// Human-readable label: last path component of the shell (e.g. "zsh"), falling back to "Shell"
@@ -241,16 +247,14 @@ private struct PaneLeafRow: View {
                     .font(.system(size: 10))
                     .foregroundStyle(Color.accentColor)
             }
-            if let kill = onKill {
-                Button(action: kill) {
-                    Image(systemName: "xmark.circle")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .opacity(isHovered ? 1 : 0)
-                .help("Kill session")
+            Button(action: onKill) {
+                Image(systemName: "xmark.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
+            .buttonStyle(.plain)
+            .opacity(isHovered ? 1 : 0)
+            .help("Close pane")
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 4)
@@ -1239,6 +1243,8 @@ struct PaneLayoutTreeView: View {
 
     var body: some View {
         switch layout {
+        case .empty:
+            EmptyView()
         case .terminal(let id, let commandLine, let sessionID):
             PaneWorkspaceTerminalView(terminalID: id, commandLine: commandLine, paneSessionID: sessionID, layout: $layout)
                 .id(id)
@@ -1373,6 +1379,27 @@ private struct PaneSplitLayout: Layout {
     }
 }
 
+private struct KytosWelcomeView: View {
+    let onNewTerminal: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "terminal")
+                .font(.system(size: 48))
+                .foregroundStyle(.tertiary)
+            Text("No open panes")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Button(action: onNewTerminal) {
+                Label("New Terminal", systemImage: "plus.rectangle")
+            }
+            .buttonStyle(.bordered)
+            .keyboardShortcut("n", modifiers: [.command])
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 struct PaneWorkspaceView: View {
     @Environment(KytosWorkspace.self) private var workspace
 
@@ -1381,10 +1408,19 @@ struct PaneWorkspaceView: View {
 
         let _ = kLog("[KytosDebug][PaneWorkspaceView] body — session=\(workspaceBindable.session.name)")
 
-        PaneLayoutTreeView(layout: $workspaceBindable.session.layout)
-            .id(workspaceBindable.session.id)
-            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosWorkspaceAction"))) { notification in
+        Group {
+            if workspaceBindable.session.layout.isEmpty {
+                KytosWelcomeView {
+                    workspaceBindable.session.layout = .terminal(id: UUID())
+                    KytosAppModel.shared.save()
+                }
+            } else {
+                PaneLayoutTreeView(layout: $workspaceBindable.session.layout)
+                    .id(workspaceBindable.session.id)
+            }
+        }
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosWorkspaceAction"))) { notification in
                 guard let userInfo = notification.userInfo,
                       let action = userInfo["action"] as? String,
                       let id = userInfo["id"] as? UUID else { return }
@@ -1426,9 +1462,9 @@ struct PaneWorkspaceView: View {
                         }
                         #endif
                     } else {
-                        #if os(macOS)
-                        NSApplication.shared.keyWindow?.performClose(nil)
-                        #endif
+                        // Last pane removed — show welcome view.
+                        workspaceBindable.session.layout = .empty
+                        KytosAppModel.shared.save()
                     }
                 }
             }

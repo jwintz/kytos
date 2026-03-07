@@ -6,8 +6,14 @@ import UniformTypeIdentifiers
 import WidgetKit
 
 public enum PaneLayoutTree: Codable, Hashable {
+    case empty
     case terminal(id: UUID, commandLine: [String]? = nil, paneSessionID: String? = nil)
     indirect case split(axis: Axis, left: PaneLayoutTree, right: PaneLayoutTree)
+
+    var isEmpty: Bool {
+        if case .empty = self { return true }
+        return false
+    }
 
     public enum Axis: String, Codable, Hashable {
         case horizontal
@@ -24,6 +30,7 @@ public enum PaneLayoutTree: Codable, Hashable {
 
     public func path(to id: UUID) -> [PathDirection]? {
         switch self {
+        case .empty: return nil
         case .terminal(let tid, _, _):
             if tid == id { return [] }
             return nil
@@ -86,6 +93,8 @@ public enum PaneLayoutTree: Codable, Hashable {
         var curr = subtree
         while true {
             switch curr {
+            case .empty:
+                return nil
             case .terminal(let tid, _, _):
                 return tid
             case .split(let axis, let left, let right):
@@ -107,6 +116,7 @@ public enum PaneLayoutTree: Codable, Hashable {
 
     public func removing(id: UUID) -> PaneLayoutTree? {
         switch self {
+        case .empty: return nil
         case .terminal(let tid, _, _):
             return tid == id ? nil : self
         case .split(let axis, let left, let right):
@@ -125,6 +135,7 @@ public enum PaneLayoutTree: Codable, Hashable {
     /// Returns the terminal leaf with the given ID, or nil if not found.
     func find(id: UUID) -> PaneLayoutTree? {
         switch self {
+        case .empty: return nil
         case .terminal(let tid, _, _):
             return tid == id ? self : nil
         case .split(_, let left, let right):
@@ -135,12 +146,14 @@ public enum PaneLayoutTree: Codable, Hashable {
     /// Returns the UUID of the first terminal leaf found (depth-first left).
     func firstLeafID() -> UUID? {
         switch self {
+        case .empty: return nil
         case .terminal(let id, _, _): return id
         case .split(_, let left, _): return left.firstLeafID()
         }
     }
     func allPaneSessionIDs() -> [String] {
         switch self {
+        case .empty: return []
         case .terminal(_, _, let sid):
             return sid.map { [$0] } ?? []
         case .split(_, let left, let right):
@@ -151,6 +164,7 @@ public enum PaneLayoutTree: Codable, Hashable {
     /// Looks up the paneSessionID for a terminal UUID in this tree.
     func sessionID(for terminalID: UUID) -> String? {
         switch self {
+        case .empty: return nil
         case .terminal(let id, _, let sid):
             return id == terminalID ? sid : nil
         case .split(_, let left, let right):
@@ -161,6 +175,7 @@ public enum PaneLayoutTree: Codable, Hashable {
     /// Returns all (terminalID, paneSessionID?) leaf pairs.
     func allTerminalLeaves() -> [(id: UUID, commandLine: [String]?, sessionID: String?)] {
         switch self {
+        case .empty: return []
         case .terminal(let id, let commandLine, let sid):
             return [(id: id, commandLine: commandLine, sessionID: sid)]
         case .split(_, let left, let right):
@@ -171,6 +186,7 @@ public enum PaneLayoutTree: Codable, Hashable {
     /// Number of terminal leaves in this subtree.
     var leafCount: Int {
         switch self {
+        case .empty: return 0
         case .terminal: return 1
         case .split(_, let left, let right): return left.leafCount + right.leafCount
         }
@@ -181,6 +197,7 @@ public enum PaneLayoutTree: Codable, Hashable {
     /// create a fresh session on next appear.
     func clearingDeadSessions(_ liveSessions: Set<String>) -> PaneLayoutTree {
         switch self {
+        case .empty: return self
         case .terminal(let id, let commandLine, let sessionID):
             let isLive = sessionID.map { liveSessions.contains($0) } ?? false
             return .terminal(id: id, commandLine: commandLine, paneSessionID: isLive ? sessionID : nil)
@@ -197,6 +214,7 @@ public enum PaneLayoutTree: Codable, Hashable {
     /// the leaf's ID is cleared so a fresh session is created.
     func deduplicatingSessions(_ seen: inout Set<String>) -> PaneLayoutTree {
         switch self {
+        case .empty: return self
         case .terminal(let id, let commandLine, let sessionID):
             if let sid = sessionID {
                 if seen.contains(sid) {
