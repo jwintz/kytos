@@ -27,7 +27,11 @@ public struct KytosWidgetSnapshot: Codable {
     }
 
     private static let widgetBundleID = "me.jwintz.Kytos.KytosWidget"
+    #if os(iOS)
+    private static let appGroupID = "group.me.jwintz.Syntropment"
+    #else
     private static let appGroupID = "group.me.jwintz.Kytos"
+    #endif
 
     /// Shared URL for widget snapshot data.
     /// - macOS: The unsandboxed main app writes directly into the widget's container.

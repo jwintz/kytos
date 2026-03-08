@@ -432,34 +432,15 @@ class MacOSLocalProcessTerminalCoordinator: NSObject, TerminalViewDelegate, Loca
     var lastRows: Int = -1
     
     func start(commandLine: [String]? = nil) {
-        let bundledMksh = Bundle.main.url(forAuxiliaryExecutable: "mksh_bin")?.path ?? Bundle.main.bundlePath + "/Contents/MacOS/mksh_bin"
-
         let shell: String
         if let exe = commandLine?.first {
             shell = exe
         } else {
-            let userChoice = KytosSettings.shared.shellChoice
-            shell = userChoice == .embeddedMksh
-                ? bundledMksh
-                : (ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh")
+            shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         }
 
         var environment = ProcessInfo.processInfo.environment
         let args: [String] = ["-l"]
-
-        if shell == bundledMksh {
-            let rcPath = FileManager.default.temporaryDirectory.appendingPathComponent("kytos_mkshrc").path
-            if !FileManager.default.fileExists(atPath: rcPath) {
-                let rc = """
-                if [ -r ~/.mkshrc ]; then
-                    . ~/.mkshrc
-                fi
-                export PS1='\\001\\033[36m\\002kytos\\001\\033[0m\\002 \\001\\033[33m\\002❯\\001\\033[0m\\002 '
-                """
-                try? rc.write(toFile: rcPath, atomically: true, encoding: .utf8)
-            }
-            environment["ENV"] = rcPath
-        }
 
         kLog("[KytosDebug] Starting shell: \(shell)")
         environment["TERM"] = "xterm-256color"
@@ -473,7 +454,7 @@ class MacOSLocalProcessTerminalCoordinator: NSObject, TerminalViewDelegate, Loca
     }
 }
 #else
-// iOS stub — no PTY support on iPadOS (in-process mksh PTY to be added later)
+// iOS — ios_system coordinator (see KytosIOSSystemCoordinator.swift)
 class MacOSLocalProcessTerminalCoordinator: NSObject, TerminalViewDelegate {
     var terminalView: TerminalView?
     var terminalID: UUID?
@@ -596,7 +577,7 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
     }
 
     // MARK: - macOS
-
+    #if os(macOS)
     func makeNSView(context: Context) -> TerminalView {
         let terminal = KytosTerminalManager.shared.getOrCreateTerminal(
             id: terminalID, colorScheme: colorScheme,
@@ -639,6 +620,7 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
         context.coordinator.lastSettingsHash = hash
         updateTerminalAppearance(nsView)
     }
+    #endif
 }
 
 class KytosTerminalManager {
@@ -657,7 +639,11 @@ class KytosTerminalManager {
     
     struct ManagedTerminal {
         let view: TerminalView
+        #if os(macOS)
         let coordinator: MacOSLocalProcessTerminalCoordinator
+        #else
+        let coordinator: KytosIOSSystemCoordinator
+        #endif
     }
     
     private var terminals: [UUID: ManagedTerminal] = [:]
@@ -752,9 +738,13 @@ class KytosTerminalManager {
     /// Close all streaming connections to break blocking reads during app quit.
     func disconnectAll() {
         for (_, managed) in terminals {
+            #if os(macOS)
             if let streaming = managed.coordinator as? KytosPaneStreamingCoordinator {
                 streaming.disconnect()
             }
+            #else
+            managed.coordinator.disconnect()
+            #endif
         }
     }
     
@@ -768,7 +758,7 @@ class KytosTerminalManager {
             ? KytosPaneStreamingCoordinator()
             : MacOSLocalProcessTerminalCoordinator()
         #else
-        let coordinator = MacOSLocalProcessTerminalCoordinator()
+        let coordinator = KytosIOSSystemCoordinator()
         #endif
         coordinator.terminalID = id
         
@@ -928,9 +918,15 @@ class KytosTerminalManager {
         return terminals[id]
     }
 
+    #if os(macOS)
     func coordinator(for id: UUID) -> MacOSLocalProcessTerminalCoordinator? {
         terminals[id]?.coordinator
     }
+    #else
+    func coordinator(for id: UUID) -> KytosIOSSystemCoordinator? {
+        terminals[id]?.coordinator
+    }
+    #endif
 
     func removeTerminal(id: UUID) {
         terminals.removeValue(forKey: id)
@@ -1332,18 +1328,22 @@ struct PaneLayoutTreeView: View {
         // 5px visible bar, 11px hit area
         if axis == .horizontal {
             Rectangle()
-                .fill(Color(NSColor.separatorColor))
+                .fill(Color.secondary.opacity(0.3))
                 .frame(width: 5)
                 .contentShape(Rectangle().size(width: 11, height: .infinity))
                 .gesture(drag)
+                #if os(macOS)
                 .onHover { h in if h { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
+                #endif
         } else {
             Rectangle()
-                .fill(Color(NSColor.separatorColor))
+                .fill(Color.secondary.opacity(0.3))
                 .frame(height: 5)
                 .contentShape(Rectangle().size(width: .infinity, height: 11))
                 .gesture(drag)
+                #if os(macOS)
                 .onHover { h in if h { NSCursor.resizeUpDown.push() } else { NSCursor.pop() } }
+                #endif
         }
     }
 

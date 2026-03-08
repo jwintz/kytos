@@ -142,6 +142,10 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
                     case .delta(let delta):
                         earlyDeltas.append(delta.toANSIBytes(terminalRows: rows))
                         kLog("[KytosDebug][PaneStream] got early delta")
+                    case .rawOutput:
+                        // Raw bytes during attach are already captured in the snapshot;
+                        // skip to avoid duplicate output.
+                        break
                     case .other:
                         kLog("[KytosDebug][PaneStream] got .other message")
                         break
@@ -184,6 +188,9 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
                     kLog("[KytosDebug][PaneStream] got snapshot \(snap.cols)x\(snap.rows), \(snap.lines.count) lines")
                 case .delta(let delta):
                     earlyDeltas.append(delta.toANSIBytes(terminalRows: rows))
+                case .rawOutput:
+                    // Raw bytes during attach are already in the snapshot; skip.
+                    break
                 case .other: break
                 }
                 if response != nil && snapshot != nil { break }
@@ -288,12 +295,16 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
                     kLog("[KytosDebug][PaneStream] readFullMessage returned nil (EOF or cancelled)")
                     break
                 }
-                if case .delta(let delta) = msg {
-                    let rows = self.lastRows
-                    let bytes = delta.toANSIBytes(terminalRows: rows)
+                if case .rawOutput(let data) = msg {
+                    // Feed raw PTY bytes directly — preserves sixel, kitty graphics,
+                    // and all DCS sequences that cell-based deltas would lose.
+                    let bytes = [UInt8](data)
                     DispatchQueue.main.async {
                         tv.feed(byteArray: bytes[...])
                     }
+                } else if case .delta(_) = msg {
+                    // Deltas are still sent alongside rawOutput but we prefer raw
+                    // bytes for full fidelity. Skip cell-based deltas.
                 }
             } catch {
                 readError = error
@@ -392,17 +403,18 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
         lastCols = newCols
         lastRows = newRows
 
-        // Send in-band resize so the app gets SIGWINCH immediately, then
-        // disconnect to stop processing deltas at mismatched dimensions.
-        // The toANSIBytes(terminalRows:) converter uses lastRows which is
-        // already updated, but deltas in flight are still for the old size —
-        // feeding them garbles TUI apps like pi.
+        // Send in-band resize so the shell gets SIGWINCH immediately.
+        // Keep the stream alive — disconnecting here races with the
+        // debounced reconnect and can leave the connection permanently
+        // cancelled (the next resize's disconnect kills the just-reconnected
+        // stream before the readLoop has a chance to process any deltas).
         if let conn = connection {
             try? conn.sendBinaryResize(cols: newCols, rows: newRows)
-            disconnect()
         }
 
-        // Debounced reconnect — get a clean snapshot once resize settles.
+        // Debounced snapshot refresh — reconnect once resize settles to get
+        // a clean snapshot at the final dimensions. This avoids garbled TUI
+        // output from deltas computed at intermediate sizes.
         resizeReconnectItem?.cancel()
         let cols = newCols
         let rows = newRows
@@ -411,10 +423,11 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
             self.resizeReconnectItem = nil
             guard let sid = self.terminalID.flatMap({ KytosTerminalManager.shared.sessionID(for: $0) }) else { return }
             kLog("[KytosDebug][PaneStream] Resize settled, reconnecting \(cols)x\(rows)")
+            self.disconnect()
             self.startStream(sessionID: sid, cols: cols, rows: rows)
         }
         resizeReconnectItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
     }
 
     override func processTerminated(_ source: SwiftTerm.LocalProcess, exitCode: Int32?) {

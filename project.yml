@@ -13,6 +13,13 @@ packages:
     path: ../kelyphos
   SwiftTerm:
     path: Submodules/SwiftTerm
+  ios_system:
+    url: https://github.com/holzschu/ios_system.git
+    from: 3.0.4
+  # network_ios deferred — upstream checksum mismatch (v0.3.0 references v0.2 binary with wrong hash)
+  # network_ios:
+  #   url: https://github.com/holzschu/network_ios.git
+  #   from: 0.2.0
 
 targets:
   Kytos-macOS:
@@ -39,17 +46,6 @@ targets:
           "${SRCROOT}/Scripts/apply-pane-patches.sh"
         basedOnDependencyAnalysis: false
     postBuildScripts:
-      - name: Build mksh
-        basedOnDependencyAnalysis: false
-        script: |
-          cd ${SRCROOT}/Submodules/mksh
-          export CFLAGS="-Wno-implicit-function-declaration -Wno-int-conversion"
-          export LDFLAGS=""
-          export CC="clang"
-          sh Build.sh -r
-          mkdir -p ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}
-          cp mksh ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin
-          codesign --force --sign - ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin
       - name: Bundle pane
         basedOnDependencyAnalysis: false
         script: |
@@ -142,24 +138,8 @@ targets:
       - target: Kytos-Widget-iOS
         embed: true
         codeSign: true
-    postBuildScripts:
-      - name: Build mksh for iOS
-        basedOnDependencyAnalysis: false
-        script: |
-          set -e
-          cd "${SRCROOT}/Submodules/mksh"
-          # Clean previous build artifacts
-          rm -f mksh mksh.o
-          # Cross-compile for iOS device arch
-          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          IOS_CC=$(xcrun --sdk iphoneos --find clang)
-          export CC="$IOS_CC"
-          export CFLAGS="-isysroot $IOS_SDK -arch arm64 -miphoneos-version-min=26.0 -Wno-implicit-function-declaration -Wno-int-conversion"
-          export LDFLAGS="-isysroot $IOS_SDK -arch arm64"
-          sh Build.sh -r
-          mkdir -p "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}"
-          cp mksh "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin"
-          codesign --force --sign - "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin"
+      - package: ios_system
+        product: ios_system
     info:
       path: Sources/KytosApp/Info.plist
       properties:
@@ -173,6 +153,9 @@ targets:
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     entitlements:
       path: Sources/KytosApp/Kytos-iOS.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.me.jwintz.Syntropment
 
   Kytos-Widget-iOS:
     type: app-extension
@@ -199,6 +182,9 @@ targets:
       LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../Frameworks"
     entitlements:
       path: Sources/KytosWidget/KytosWidget-iOS.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.me.jwintz.Syntropment
 
 schemes:
   Kytos-macOS:

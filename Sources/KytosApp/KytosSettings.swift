@@ -52,8 +52,11 @@ public final class KytosSettings {
     }
     
     public enum ShellChoice: String, CaseIterable, Identifiable {
-        case embeddedMksh = "Embedded mksh"
+        #if os(iOS)
+        case dash = "dash"
+        #else
         case systemShell = "System Shell"
+        #endif
         public var id: String { rawValue }
     }
     
@@ -81,12 +84,17 @@ public final class KytosSettings {
         let defaults = UserDefaults.standard
 
         // Defaults
+        #if os(iOS)
+        let defaultShell = ShellChoice.dash.rawValue
+        #else
+        let defaultShell = ShellChoice.systemShell.rawValue
+        #endif
         defaults.register(defaults: [
             cursorStyleKey: "steadyBlock",
             cursorBlinkKey: false,
             fontFamilyKey: "SF Mono",
             fontSizeKey: 12.0,
-            shellChoiceKey: ShellChoice.embeddedMksh.rawValue,
+            shellChoiceKey: defaultShell,
             horizontalMarginKey: 0.0,
             ansi256PaletteKey: "xterm",
             scrollbackSizeKey: 500
@@ -106,7 +114,11 @@ public final class KytosSettings {
         if let shellRaw = defaults.string(forKey: shellChoiceKey), let choice = ShellChoice(rawValue: shellRaw) {
             self.shellChoice = choice
         } else {
-            self.shellChoice = .embeddedMksh
+            #if os(iOS)
+            self.shellChoice = .dash
+            #else
+            self.shellChoice = .systemShell
+            #endif
         }
 
         self.horizontalMargin = CGFloat(defaults.double(forKey: horizontalMarginKey))
@@ -121,16 +133,11 @@ public final class KytosSettings {
     
     public func resolvedCommandLine() -> [String] {
         #if os(macOS)
-        let bundledMksh = Bundle.main.url(forAuxiliaryExecutable: "mksh_bin")?.path
-            ?? Bundle.main.bundlePath + "/Contents/MacOS/mksh_bin"
         switch shellChoice {
-        case .embeddedMksh: return [bundledMksh]
         case .systemShell:  return [ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"]
         }
         #else
-        let bundledMksh = Bundle.main.url(forAuxiliaryExecutable: "mksh_bin")?.path
-            ?? Bundle.main.bundlePath + "/mksh_bin"
-        return [bundledMksh]
+        return ["dash"]
         #endif
     }
 

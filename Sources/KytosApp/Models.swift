@@ -131,7 +131,6 @@ public enum PaneLayoutTree: Codable, Hashable {
         }
     }
 
-    #if os(macOS)
     /// Returns the terminal leaf with the given ID, or nil if not found.
     func find(id: UUID) -> PaneLayoutTree? {
         switch self {
@@ -149,26 +148,6 @@ public enum PaneLayoutTree: Codable, Hashable {
         case .empty: return nil
         case .terminal(let id, _, _): return id
         case .split(_, let left, _): return left.firstLeafID()
-        }
-    }
-    func allPaneSessionIDs() -> [String] {
-        switch self {
-        case .empty: return []
-        case .terminal(_, _, let sid):
-            return sid.map { [$0] } ?? []
-        case .split(_, let left, let right):
-            return left.allPaneSessionIDs() + right.allPaneSessionIDs()
-        }
-    }
-
-    /// Looks up the paneSessionID for a terminal UUID in this tree.
-    func sessionID(for terminalID: UUID) -> String? {
-        switch self {
-        case .empty: return nil
-        case .terminal(let id, _, let sid):
-            return id == terminalID ? sid : nil
-        case .split(_, let left, let right):
-            return left.sessionID(for: terminalID) ?? right.sessionID(for: terminalID)
         }
     }
 
@@ -189,6 +168,28 @@ public enum PaneLayoutTree: Codable, Hashable {
         case .empty: return 0
         case .terminal: return 1
         case .split(_, let left, let right): return left.leafCount + right.leafCount
+        }
+    }
+
+    #if os(macOS)
+    func allPaneSessionIDs() -> [String] {
+        switch self {
+        case .empty: return []
+        case .terminal(_, _, let sid):
+            return sid.map { [$0] } ?? []
+        case .split(_, let left, let right):
+            return left.allPaneSessionIDs() + right.allPaneSessionIDs()
+        }
+    }
+
+    /// Looks up the paneSessionID for a terminal UUID in this tree.
+    func sessionID(for terminalID: UUID) -> String? {
+        switch self {
+        case .empty: return nil
+        case .terminal(let id, _, let sid):
+            return id == terminalID ? sid : nil
+        case .split(_, let left, let right):
+            return left.sessionID(for: terminalID) ?? right.sessionID(for: terminalID)
         }
     }
 
@@ -412,9 +413,13 @@ public final class KytosAppModel {
         let windowList = windows.values.map { workspace -> KytosWidgetWindow in
             let leaves = workspace.session.layout.allTerminalLeaves()
             let terminals = leaves.map { leaf -> KytosWidgetTerminal in
+                #if os(macOS)
                 let process = KytosTerminalManager.shared.foregroundProcessName(for: leaf.id)
                     ?? leaf.commandLine?.first
                     ?? "zsh"
+                #else
+                let process = leaf.commandLine?.first ?? "dash"
+                #endif
                 return KytosWidgetTerminal(id: leaf.id, process: process)
             }
             return KytosWidgetWindow(id: workspace.session.id, name: workspace.session.name, terminals: terminals)

@@ -9,7 +9,7 @@ enum KytosPaneCommand: String, Codable {
 }
 
 enum KytosPaneMessageType: String, Codable {
-    case request, response, snapshot, delta, input, resize
+    case request, response, snapshot, delta, input, resize, rawOutput
 }
 
 struct KytosPaneRequest: Codable {
@@ -99,6 +99,7 @@ enum KytosPaneFullMessage {
     case response(KytosPaneResponse)
     case snapshot(KytosPaneTerminalSnapshot)
     case delta(KytosPaneTerminalDelta)
+    case rawOutput(Data)
     case other
 }
 
@@ -316,6 +317,11 @@ final class KytosPaneConnection {
             switch tag {
             case 2: return try .snapshot(reader.readSnapshot())
             case 3: return try .delta(reader.readDelta())
+            case 6:
+                // rawOutput: [4-byte length][payload bytes]
+                let len = Int(try reader.readUInt32())
+                let bytes = try reader.readData(len)
+                return .rawOutput(bytes)
             default: return .other
             }
         }

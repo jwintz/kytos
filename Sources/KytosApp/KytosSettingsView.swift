@@ -86,7 +86,6 @@ private struct KytosTerminalSettingsTab: View {
             Section("Shell") {
                 #if os(macOS)
                 Picker("Default Shell", selection: $settings.shellChoice) {
-                    Text("Embedded mksh").tag(KytosSettings.ShellChoice.embeddedMksh)
                     Text("System Default").tag(KytosSettings.ShellChoice.systemShell)
                 }
                 Text("Changes apply to new terminal sessions.")
@@ -94,10 +93,10 @@ private struct KytosTerminalSettingsTab: View {
                     .foregroundColor(.secondary)
                 #else
                 Picker("Default Shell", selection: $settings.shellChoice) {
-                    Text("Embedded mksh").tag(KytosSettings.ShellChoice.embeddedMksh)
+                    Text("dash (POSIX)").tag(KytosSettings.ShellChoice.dash)
                 }
                 .disabled(true)
-                Text("Only the embedded mksh is supported on iOS.")
+                Text("iOS uses dash via ios_system.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 #endif
