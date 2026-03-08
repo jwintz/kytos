@@ -13,14 +13,13 @@ generate = "swift run xcodegen generate --spec project.yml"
 # Use `pixi run generate` to force-regenerate unconditionally.
 generate-if-needed = "bash -c 'test Kytos.xcodeproj/project.pbxproj -nt project.yml || swift run xcodegen generate --spec project.yml'"
 
+# Always build (use for forced rebuild).
 build = { cmd = "xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates", depends-on = ["generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
+# Build only when sources, project, or submodules are newer than the built binary.
+build-if-needed = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); BIN=\"$BUILT/Kytos.app/Contents/MacOS/Kytos\"; if [ -f \"$BIN\" ] && [ -z \"$(find Sources Submodules project.yml Kytos.xcodeproj/project.pbxproj -newer \"$BIN\" 2>/dev/null | head -1)\" ]; then echo \"Build up to date.\"; else xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates; fi'", depends-on = ["generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
 build-ios = { cmd = "xcodebuild -project Kytos.xcodeproj -scheme Kytos-iOS -configuration Debug -destination 'generic/platform=iOS' build -allowProvisioningUpdates", depends-on = ["generate-if-needed"] }
 # Run unit tests (scrollback logic + ANSI encoding).
 test = { cmd = "bash Scripts/run-tests.sh", depends-on = ["generate-if-needed"] }
 
-# Launch the already-built app. Use `pixi run build` first if needed.
-# Kills any old pane daemon to avoid protocol mismatches after rebuild.
-run = "bash -c 'PID=$(cat /tmp/pane-$(id -u)/pane.pid 2>/dev/null) && [ -n \"$PID\" ] && kill \"$PID\" 2>/dev/null && echo \"Killed old pane daemon (PID $PID)\"; BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); open -W \"$BUILT/Kytos.app\"'"
-
-# Build + run in one step.
-build-and-run = { cmd = "bash -c 'PID=$(cat /tmp/pane-$(id -u)/pane.pid 2>/dev/null) && [ -n \"$PID\" ] && kill \"$PID\" 2>/dev/null && echo \"Killed old pane daemon (PID $PID)\"; BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); open -W \"$BUILT/Kytos.app\"'", depends-on = ["build"] }
+# Build if needed, kill old pane daemon, launch app.
+run = { cmd = "bash -c 'PID=$(cat /tmp/pane-$(id -u)/pane.pid 2>/dev/null) && [ -n \"$PID\" ] && kill \"$PID\" 2>/dev/null && echo \"Killed old pane daemon (PID $PID)\"; BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); open -W \"$BUILT/Kytos.app\"'", depends-on = ["build-if-needed"] }
