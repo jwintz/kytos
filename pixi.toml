@@ -14,10 +14,13 @@ generate = "swift run xcodegen generate --spec project.yml"
 generate-if-needed = "bash -c 'test Kytos.xcodeproj/project.pbxproj -nt project.yml || swift run xcodegen generate --spec project.yml'"
 
 build = { cmd = "xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates", depends-on = ["generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
+build-ios = { cmd = "xcodebuild -project Kytos.xcodeproj -scheme Kytos-iOS -configuration Debug -destination 'generic/platform=iOS' build -allowProvisioningUpdates", depends-on = ["generate-if-needed"] }
 # Run unit tests (scrollback logic + ANSI encoding).
 test = { cmd = "bash Scripts/run-tests.sh", depends-on = ["generate-if-needed"] }
-# Launch via LaunchServices so the dock icon and widget extension are properly registered.
-# lsregister + pluginkit ensure the widget appears in System Settings on first run.
-# Kills any old pane daemon first to avoid protocol mismatches after rebuild.
-# `open -W` waits for the app to exit (keeps the task foreground).
-run = { cmd = "bash -c 'PID=$(cat /tmp/pane-$(id -u)/pane.pid 2>/dev/null) && [ -n \"$PID\" ] && kill \"$PID\" 2>/dev/null && echo \"Killed old pane daemon (PID $PID)\"; BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); rm -rf ~/Library/Caches/com.apple.iconservices.store 2>/dev/null; /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f \"$BUILT/Kytos.app\"; sleep 2; pluginkit -a \"$BUILT/Kytos.app/Contents/PlugIns/KytosWidget.appex\" 2>/dev/null; killall Dock 2>/dev/null; sleep 3; open -W \"$BUILT/Kytos.app\"'", depends-on = ["build"] }
+
+# Launch the already-built app. Use `pixi run build` first if needed.
+# Kills any old pane daemon to avoid protocol mismatches after rebuild.
+run = "bash -c 'PID=$(cat /tmp/pane-$(id -u)/pane.pid 2>/dev/null) && [ -n \"$PID\" ] && kill \"$PID\" 2>/dev/null && echo \"Killed old pane daemon (PID $PID)\"; BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); open -W \"$BUILT/Kytos.app\"'"
+
+# Build + run in one step.
+build-and-run = { cmd = "bash -c 'PID=$(cat /tmp/pane-$(id -u)/pane.pid 2>/dev/null) && [ -n \"$PID\" ] && kill \"$PID\" 2>/dev/null && echo \"Killed old pane daemon (PID $PID)\"; BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); open -W \"$BUILT/Kytos.app\"'", depends-on = ["build"] }

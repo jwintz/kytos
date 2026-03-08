@@ -15,6 +15,7 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
     /// Stores a resize that arrived while the initial snapshot handshake was in progress,
     /// so it can be flushed once the stream is established.
     private var pendingResizeDuringAttach: (cols: Int, rows: Int)?
+    private var resizeDebounceItem: DispatchWorkItem?
 
     /// Tracks whether the initial snapshot (with scrollback) has been fed to the terminal.
     /// On reconnects we only replay the visible screen, preserving the existing scrollback ring.
@@ -214,11 +215,14 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
         } else {
             hasCompletedInitialAttach = true
             kLog("[KytosDebug][PaneStream] Initial attach: feeding snapshot \(snapshot.cols)x\(snapshot.rows) (\(bytes.count) bytes, \(snapshot.scrollbackLines.count) scrollback lines)")
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
                 tv.feed(byteArray: bytes[...])
                 for delta in earlyDeltas {
                     tv.feed(byteArray: delta[...])
                 }
+                guard let tid = self?.terminalID else { return }
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("KytosStreamAttached"), object: tid)
             }
         }
         // Inform the server of the real terminal size; it will SIGWINCH the shell.
@@ -234,6 +238,8 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
 
     /// Close the streaming connection, breaking the blocking readLoop.
     func disconnect() {
+        resizeDebounceItem?.cancel()
+        resizeDebounceItem = nil
         streamGen += 1  // Invalidate the old readQueue defer
         if let conn = connection {
             conn.cancelled = true       // Tell poll-based readExact to exit
@@ -384,18 +390,22 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
               newCols != lastCols || newRows != lastRows else { return }
         lastCols = newCols
         lastRows = newRows
-        // Disconnect and restart the stream so we get a fresh snapshot with
-        // properly reflowed scrollback at the new dimensions.
-        if let sid = terminalID.flatMap({ KytosTerminalManager.shared.sessionID(for: $0) }) {
-            kLog("[KytosDebug][PaneStream] sizeChanged: reconnecting for resize \(newCols)x\(newRows)")
-            disconnect()
-            startStream(sessionID: sid, cols: newCols, rows: newRows)
-        } else {
-            let conn = connection
-            writeQueue.async {
-                try? conn?.sendBinaryResize(cols: newCols, rows: newRows)
+
+        // Send in-band resize over the existing connection (debounced 100ms).
+        resizeDebounceItem?.cancel()
+        let cols = newCols
+        let rows = newRows
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, let conn = self.connection else { return }
+            do {
+                try conn.sendBinaryResize(cols: cols, rows: rows)
+            } catch {
+                kLog("[KytosDebug][PaneStream] sendBinaryResize failed: \(error)")
+                // readLoop will detect the broken pipe and auto-reconnect
             }
         }
+        resizeDebounceItem = item
+        writeQueue.asyncAfter(deadline: .now() + 0.1, execute: item)
     }
 
     override func processTerminated(_ source: SwiftTerm.LocalProcess, exitCode: Int32?) {

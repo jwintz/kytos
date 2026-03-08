@@ -1242,9 +1242,19 @@ struct PaneWorkspaceTerminalView: View {
             window.makeFirstResponder(nil)
         }
         #endif
-        // Request focus on the new pane after the view hierarchy updates
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            kLog("[KytosDebug][Split] Requesting focus for new pane \(newID.uuidString.prefix(8))")
+        // Request focus on the new pane once its stream is attached
+        var focusObserver: NSObjectProtocol?
+        focusObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("KytosStreamAttached"),
+            object: newID, queue: .main
+        ) { _ in
+            if let obs = focusObserver { NotificationCenter.default.removeObserver(obs) }
+            kLog("[KytosDebug][Split] Stream attached, requesting focus for new pane \(newID.uuidString.prefix(8))")
+            NotificationCenter.default.post(name: NSNotification.Name("KytosRequestFocus"), object: newID)
+        }
+        // Fallback timeout in case the notification never fires
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            if let obs = focusObserver { NotificationCenter.default.removeObserver(obs) }
             NotificationCenter.default.post(name: NSNotification.Name("KytosRequestFocus"), object: newID)
         }
         // Tell all terminals to recalculate their size after the layout change settles

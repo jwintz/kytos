@@ -7,11 +7,10 @@ options:
 settings:
   DEVELOPMENT_TEAM: H4T77W7K9A
   CODE_SIGN_STYLE: Automatic
+  SWIFT_VERSION: "5"
 packages:
   Kelyphos:
     path: ../kelyphos
-  pane:
-    path: Submodules/Pane
   SwiftTerm:
     path: Submodules/SwiftTerm
 
@@ -24,11 +23,11 @@ targets:
       - path: Sources/KytosWidget/KytosWidgetSnapshot.swift
       - path: Kytos-Default.icns
         buildPhase: resources
+      - path: Kytos-Default.icon
+        buildPhase: resources
     dependencies:
       - package: Kelyphos
         product: KelyphosKit
-      - package: pane
-        product: pane
       - package: SwiftTerm
         product: SwiftTerm
       - target: Kytos-Widget-macOS
@@ -41,6 +40,7 @@ targets:
         basedOnDependencyAnalysis: false
     postBuildScripts:
       - name: Build mksh
+        basedOnDependencyAnalysis: false
         script: |
           cd ${SRCROOT}/Submodules/mksh
           export CFLAGS="-Wno-implicit-function-declaration -Wno-int-conversion"
@@ -51,6 +51,7 @@ targets:
           cp mksh ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin
           codesign --force --sign - ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin
       - name: Bundle pane
+        basedOnDependencyAnalysis: false
         script: |
           set -e
           export PATH="/usr/bin:/bin:/usr/local/bin:$PATH"
@@ -65,6 +66,12 @@ targets:
             cp "$PANE_BIN" "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/pane"
             codesign --force --sign - "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/pane"
           fi
+      - name: Register widget
+        basedOnDependencyAnalysis: false
+        script: |
+          LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+          "$LSREGISTER" -f "${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app" 2>/dev/null || true
+          pluginkit -a "${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/PlugIns/KytosWidget.appex" 2>/dev/null || true
 
     info:
       path: Sources/KytosApp/Info.plist
@@ -74,6 +81,7 @@ targets:
         CFBundleName: Kytos
         CFBundleDisplayName: Kytos
         CFBundleIconFile: Kytos-Default
+        CFBundleIconName: Kytos-Default
     settings:
       PRODUCT_NAME: Kytos
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos
@@ -86,6 +94,9 @@ targets:
     platform: macOS
     sources:
       - path: Sources/KytosWidget
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
     info:
       path: Sources/KytosWidget/Info.plist
       properties:
@@ -98,6 +109,9 @@ targets:
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos.KytosWidget
       SKIP_INSTALL: YES
       ENABLE_APP_SANDBOX: YES
+      APPLICATION_EXTENSION_API_ONLY: YES
+      DEAD_CODE_STRIPPING: NO
+      LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
     entitlements:
       path: Sources/KytosWidget/KytosWidget.entitlements
 
@@ -129,16 +143,23 @@ targets:
         embed: true
         codeSign: true
     postBuildScripts:
-      - name: Build mksh
+      - name: Build mksh for iOS
+        basedOnDependencyAnalysis: false
         script: |
-          cd ${SRCROOT}/Submodules/mksh
-          export CFLAGS="-Wno-implicit-function-declaration -Wno-int-conversion"
-          export LDFLAGS=""
-          export CC="clang"
+          set -e
+          cd "${SRCROOT}/Submodules/mksh"
+          # Clean previous build artifacts
+          rm -f mksh mksh.o
+          # Cross-compile for iOS device arch
+          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          IOS_CC=$(xcrun --sdk iphoneos --find clang)
+          export CC="$IOS_CC"
+          export CFLAGS="-isysroot $IOS_SDK -arch arm64 -miphoneos-version-min=26.0 -Wno-implicit-function-declaration -Wno-int-conversion"
+          export LDFLAGS="-isysroot $IOS_SDK -arch arm64"
           sh Build.sh -r
-          mkdir -p ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}
-          cp mksh ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin
-          codesign --force --sign - ${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin
+          mkdir -p "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}"
+          cp mksh "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin"
+          codesign --force --sign - "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/mksh_bin"
     info:
       path: Sources/KytosApp/Info.plist
       properties:
@@ -151,13 +172,16 @@ targets:
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     entitlements:
-      path: Sources/KytosApp/Kytos.entitlements
+      path: Sources/KytosApp/Kytos-iOS.entitlements
 
   Kytos-Widget-iOS:
     type: app-extension
     platform: iOS
     sources:
       - path: Sources/KytosWidget
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
     info:
       path: Sources/KytosWidget/Info.plist
       properties:
@@ -170,6 +194,30 @@ targets:
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos.KytosWidget
       SKIP_INSTALL: YES
       ENABLE_APP_SANDBOX: YES
+      APPLICATION_EXTENSION_API_ONLY: YES
+      DEAD_CODE_STRIPPING: NO
+      LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../Frameworks"
     entitlements:
-      path: Sources/KytosWidget/KytosWidget.entitlements
+      path: Sources/KytosWidget/KytosWidget-iOS.entitlements
 
+schemes:
+  Kytos-macOS:
+    build:
+      targets:
+        Kytos-macOS: all
+        Kytos-Widget-macOS: all
+    run:
+      config: Debug
+  Kytos-iOS:
+    build:
+      targets:
+        Kytos-iOS: all
+        Kytos-Widget-iOS: all
+    run:
+      config: Debug
+  Kytos-Tests:
+    build:
+      targets:
+        Kytos-Tests: all
+    run:
+      config: Debug

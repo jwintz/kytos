@@ -26,30 +26,41 @@ public struct KytosWidgetSnapshot: Codable {
         self.windows = windows
     }
 
-    /// Widget container path where the sandboxed widget can read.
-    /// The unsandboxed main app writes here directly; the sandboxed widget
-    /// reads from its own container via the standard Application Support API.
     private static let widgetBundleID = "me.jwintz.Kytos.KytosWidget"
+    private static let appGroupID = "group.me.jwintz.Kytos"
 
-    /// URL used by the main app (unsandboxed) to write into the widget's container.
+    /// Shared URL for widget snapshot data.
+    /// - macOS: The unsandboxed main app writes directly into the widget's container.
+    ///   The sandboxed widget reads from its own Application Support.
+    /// - iOS: Both app and widget use the shared App Group container.
+    private static var sharedURL: URL {
+        let dir: URL
+        #if os(iOS)
+        dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)!
+            .appendingPathComponent("Kytos", isDirectory: true)
+        #else
+        dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("Kytos", isDirectory: true)
+        #endif
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("widget-snapshot.json")
+    }
+
+    /// URL used by the main app (unsandboxed on macOS) to write widget data.
     public static var appWriteURL: URL {
+        #if os(macOS)
         let home = FileManager.default.homeDirectoryForCurrentUser
         let dir = home
             .appendingPathComponent("Library/Containers/\(widgetBundleID)/Data/Library/Application Support/Kytos", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("widget-snapshot.json")
-    }
-
-    /// URL used by the widget (sandboxed) — resolves to its own container automatically.
-    private static var widgetReadURL: URL {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Kytos", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("widget-snapshot.json")
+        #else
+        return sharedURL
+        #endif
     }
 
     public static func read() -> KytosWidgetSnapshot? {
-        guard let data = try? Data(contentsOf: widgetReadURL),
+        guard let data = try? Data(contentsOf: sharedURL),
               let snapshot = try? JSONDecoder().decode(KytosWidgetSnapshot.self, from: data)
         else { return nil }
         return snapshot
