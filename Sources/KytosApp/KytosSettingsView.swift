@@ -45,8 +45,7 @@ private struct KytosTerminalSettingsTab: View {
                         .font(Font.custom(settings.fontFamily, size: settings.fontSize))
                         .padding()
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.secondary.opacity(0.1))
-                        .cornerRadius(8)
+                        .glassEffect(in: RoundedRectangle(cornerRadius: 8))
                 }
                 .padding(.vertical, 4)
 

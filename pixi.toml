@@ -20,5 +20,32 @@ build-if-needed = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj 
 # Run unit tests (scrollback logic + ANSI encoding).
 test = { cmd = "bash Scripts/run-tests.sh", depends-on = ["generate-if-needed"] }
 
+# Remove all build artifacts, derived data, and generated project for a pristine rebuild.
+distclean = "rm -rf .build Kytos.xcodeproj DerivedData build && xcodebuild -alltargets clean 2>/dev/null; echo 'distclean complete'"
+
 # Build if needed, kill old pane daemon, launch app.
 run = { cmd = "bash -c 'PID=$(cat /tmp/pane-$(id -u)/pane.pid 2>/dev/null) && [ -n \"$PID\" ] && kill \"$PID\" 2>/dev/null && echo \"Killed old pane daemon (PID $PID)\"; BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); open -W \"$BUILT/Kytos.app\"'", depends-on = ["build-if-needed"] }
+
+# -- Release packaging tasks --
+
+# Build Release configuration via xcodebuild.
+build-release = { cmd = "xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release build -allowProvisioningUpdates", depends-on = ["generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
+
+# Assemble the .app bundle from the Release build output.
+# xcodebuild already produces a full Kytos.app (with pane binary and widget appex bundled
+# via build phases in project.yml), so we just locate and copy it to the project root.
+package = { cmd = "bash -c 'set -e; BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); if [ ! -d \"$BUILT/Kytos.app\" ]; then echo \"ERROR: Release build not found at $BUILT/Kytos.app\"; exit 1; fi; rm -rf Kytos.app; cp -R \"$BUILT/Kytos.app\" Kytos.app; echo \"Packaged: Kytos.app\"'", depends-on = ["build-release"] }
+
+# Create a DMG disk image with the .app and an Applications symlink.
+dmg = { cmd = "bash -c 'set -e; VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed \"s/^v//\" || echo \"0.0.0\"); DMG=\"Kytos-${VERSION}.dmg\"; rm -f \"$DMG\"; TEMP=$(mktemp -d); cp -R Kytos.app \"$TEMP/\"; ln -s /Applications \"$TEMP/Applications\"; hdiutil create -volname Kytos -srcfolder \"$TEMP\" -ov -format UDZO \"$DMG\"; rm -rf \"$TEMP\"; echo \"Created: $DMG\"'", depends-on = ["package"] }
+
+# Code sign the .app bundle. Set SIGN_IDENTITY env var for distribution signing;
+# defaults to ad-hoc ("-") for local testing.
+sign = { cmd = "bash -c 'set -e; IDENTITY=\"${SIGN_IDENTITY:--}\"; if [ \"$IDENTITY\" = \"-\" ]; then codesign --force --deep --sign - Kytos.app; echo \"Ad-hoc signed Kytos.app\"; else codesign --force --deep --options runtime --sign \"$IDENTITY\" Kytos.app; echo \"Signed Kytos.app with: $IDENTITY\"; fi'", depends-on = ["package"] }
+
+# Submit the DMG for Apple notarization.
+# Requires: APPLE_ID, APPLE_PASSWORD (app-specific), APPLE_TEAM_ID env vars.
+notarize = { cmd = "bash -c 'set -e; VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed \"s/^v//\" || echo \"0.0.0\"); DMG=\"Kytos-${VERSION}.dmg\"; if [ ! -f \"$DMG\" ]; then echo \"ERROR: $DMG not found. Run pixi run dmg first.\"; exit 1; fi; if [ -z \"$APPLE_ID\" ] || [ -z \"$APPLE_PASSWORD\" ] || [ -z \"$APPLE_TEAM_ID\" ]; then echo \"ERROR: Set APPLE_ID, APPLE_PASSWORD, and APPLE_TEAM_ID env vars.\"; exit 1; fi; echo \"Submitting $DMG for notarization...\"; xcrun notarytool submit \"$DMG\" --apple-id \"$APPLE_ID\" --password \"$APPLE_PASSWORD\" --team-id \"$APPLE_TEAM_ID\" --wait; echo \"Stapling...\"; xcrun stapler staple \"$DMG\"; echo \"Notarized: $DMG\"'" }
+
+# Generate a changelog from git log since the last tag.
+changelog = "bash -c 'TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo \"\"); if [ -z \"$TAG\" ]; then echo \"# Changelog\"; echo \"\"; git log --pretty=format:\"- %s (%h)\" --no-merges; else echo \"# Changelog since $TAG\"; echo \"\"; git log \"${TAG}..HEAD\" --pretty=format:\"- %s (%h)\" --no-merges; fi'"

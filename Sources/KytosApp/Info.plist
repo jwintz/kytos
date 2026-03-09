@@ -8,8 +8,6 @@
 	<string>Kytos</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
-	<key>CFBundleIconFile</key>
-	<string>Kytos-Default</string>
 	<key>CFBundleIconName</key>
 	<string>Kytos-Default</string>
 	<key>CFBundleIdentifier</key>

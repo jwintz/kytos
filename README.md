@@ -24,6 +24,15 @@ Then run:
 $(xcodebuild -project /Users/jwintz/Syntropment/kytos/Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | awk '/BUILT_PRODUCTS_DIR/{print $3}' | head -1)/Kytos.app/Contents/MacOS/Kytos
 ```
 
+## App Icon
+
+Kytos uses Apple's `.icon` package format introduced in macOS 26 (Tahoe). There is no `.icns` fallback — macOS 26 is the minimum deployment target.
+
+- **Location**: `Kytos-Default.icon/` at the repository root.
+- **Format**: The directory contains an `icon.json` manifest that defines layers, shadow, and translucency for the Liquid Glass icon style.
+- **Build integration**: `actool` compiles the `.icon` package automatically during the Xcode build (driven by XcodeGen via `project.yml`). The app references it through `CFBundleIconName: Kytos-Default` in Info.plist.
+- **Updating the icon**: Replace `Assets/kytos.png` with a new source image and adjust `icon.json` layer definitions as needed.
+
 ## Architecture
 
 | Component | Role |

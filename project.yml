@@ -20,8 +20,6 @@ targets:
     sources:
       - path: Sources/KytosApp
       - path: Sources/KytosWidget/KytosWidgetSnapshot.swift
-      - path: Kytos-Default.icns
-        buildPhase: resources
       - path: Kytos-Default.icon
         buildPhase: resources
     dependencies:
@@ -32,11 +30,6 @@ targets:
       - target: Kytos-Widget-macOS
         embed: true
         codeSign: true
-    preBuildScripts:
-      - name: Apply Pane Patches
-        script: |
-          "${SRCROOT}/Scripts/apply-pane-patches.sh"
-        basedOnDependencyAnalysis: false
     postBuildScripts:
       - name: Bundle pane
         basedOnDependencyAnalysis: false
@@ -68,7 +61,6 @@ targets:
         NSPrincipalClass: NSApplication
         CFBundleName: Kytos
         CFBundleDisplayName: Kytos
-        CFBundleIconFile: Kytos-Default
         CFBundleIconName: Kytos-Default
     settings:
       PRODUCT_NAME: Kytos

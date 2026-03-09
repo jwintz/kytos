@@ -106,10 +106,10 @@ struct ProcessEntry: Identifiable {
 
     var isRunning: Bool { !stat.hasPrefix("Z") && !stat.hasPrefix("T") }
     var statusColor: Color {
-        if stat.hasPrefix("Z") { return .red }      // zombie
-        if stat.hasPrefix("T") { return .orange }   // stopped
-        if stat.hasPrefix("R") { return .green }    // running
-        return .secondary.opacity(0.6)              // sleeping
+        if stat.hasPrefix("Z") { return .secondary }          // zombie
+        if stat.hasPrefix("T") { return .secondary.opacity(0.4) } // stopped
+        if stat.hasPrefix("R") { return .primary.opacity(0.6) }   // running
+        return .secondary.opacity(0.6)                            // sleeping
     }
 }
 
@@ -141,7 +141,7 @@ struct KytosProcessInfoView: View {
             }
         }
         .task { await refresh() }
-        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in
             Task { await refresh() }
         }
     }
@@ -152,7 +152,7 @@ struct KytosProcessInfoView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Circle()
-                    .fill(ctx.sessionInfo.isRunning ? Color.green : Color.secondary.opacity(0.5))
+                    .fill(ctx.sessionInfo.isRunning ? Color.primary.opacity(0.6) : Color.secondary.opacity(0.5))
                     .frame(width: 7, height: 7)
                 Text("Session \(ctx.sessionInfo.id)")
                     .font(.system(size: 11, weight: .medium))
@@ -237,15 +237,15 @@ struct KytosProcessInfoView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            glassGaugeRow(label: "CPU", value: stats.cpuUsage, icon: "cpu", tint: .blue,
+            glassGaugeRow(label: "CPU", value: stats.cpuUsage, icon: "cpu", tint: .secondary,
                           detail: String(format: "%.0f%%", stats.cpuUsage * 100))
-            glassGaugeRow(label: "Memory", value: stats.memoryUsage, icon: "memorychip", tint: .green,
+            glassGaugeRow(label: "Memory", value: stats.memoryUsage, icon: "memorychip", tint: .secondary,
                           detail: String(format: "%.0f%%", stats.memoryUsage * 100))
-            glassGaugeRow(label: "Energy", value: stats.energyImpact, icon: "bolt.fill", tint: .orange,
+            glassGaugeRow(label: "Energy", value: stats.energyImpact, icon: "bolt.fill", tint: .secondary,
                           detail: String(format: "%.0f%%", stats.energyImpact * 100))
-            glassGaugeRow(label: "Disk", value: stats.diskUsage, icon: "internaldrive", tint: .purple,
+            glassGaugeRow(label: "Disk", value: stats.diskUsage, icon: "internaldrive", tint: .secondary,
                           detail: kytosFormatBytes(stats.diskReadBytes + stats.diskWriteBytes) + "/s")
-            glassGaugeRow(label: "Network", value: stats.networkActivity, icon: "network", tint: .cyan,
+            glassGaugeRow(label: "Network", value: stats.networkActivity, icon: "network", tint: .secondary,
                           detail: "↑\(kytosFormatBytes(stats.networkOutBytes)) ↓\(kytosFormatBytes(stats.networkInBytes))")
         }
         .padding(12)
@@ -572,7 +572,7 @@ struct KytosEnvironmentInspectorView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(.bar)
+                .glassEffect()
 
                 Picker("Group", selection: $selectedGroup) {
                     Text("All").tag(Optional<EnvGroup>.none)
@@ -597,7 +597,7 @@ struct KytosEnvironmentInspectorView: View {
             }
         }
         .task { await refresh() }
-        .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
             Task { await refresh() }
         }
     }
@@ -728,12 +728,12 @@ struct KytosHistoryInspectorView: View {
                             .foregroundStyle(.tertiary)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 2)
-                            .background(Capsule().fill(.secondary.opacity(0.15)))
+                            .glassEffect(in: .capsule)
                     }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(.bar)
+                .glassEffect()
             }
 
             if commands.isEmpty {
@@ -758,7 +758,7 @@ struct KytosHistoryInspectorView: View {
             }
         }
         .task { await refresh() }
-        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
             Task { await refresh() }
         }
     }
@@ -870,7 +870,7 @@ struct KytosSearchUtilityView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(.bar)
+            .glassEffect()
 
             Divider()
 
@@ -977,7 +977,7 @@ struct KytosResourcesUtilityView: View {
             }
         }
         .task { await refresh() }
-        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in
             Task { await refresh() }
         }
     }
@@ -1052,7 +1052,7 @@ struct KytosConnectionsUtilityView: View {
                             Spacer()
                             Text(conn.state)
                                 .font(.system(size: 10))
-                                .foregroundStyle(conn.state == "ESTABLISHED" ? .green : .secondary)
+                                .foregroundStyle(.secondary)
                         }
                         Text(conn.localAddr)
                             .font(.system(size: 11, design: .monospaced))
@@ -1070,7 +1070,7 @@ struct KytosConnectionsUtilityView: View {
             }
         }
         .task { await refresh() }
-        .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
             Task { await refresh() }
         }
     }

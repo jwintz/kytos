@@ -64,6 +64,10 @@ struct KytosSessionsSidebar: View {
     @State private var foregroundProcessNames: [UUID: String] = [:]
     @State private var trackedFocusedID: UUID?
 
+    // Single consolidated timer for sidebar updates (was 3 separate timers at 0.3s/1s/5s)
+    private static let sidebarTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var sessionRefreshCounter: Int = 0
+
     var body: some View {
         @Bindable var workspaceBindable = workspace
 
@@ -125,14 +129,16 @@ struct KytosSessionsSidebar: View {
         }
         .listStyle(.sidebar)
         .task { await refreshSessions() }
-        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
-            Task { await refreshSessions() }
-        }
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-            refreshProcessNames()
-        }
-        .onReceive(Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(Self.sidebarTimer) { _ in
+            // Consolidated: track focus + refresh process names every 1s (was 0.3s + 1s)
             trackedFocusedID = KytosTerminalManager.shared.activeTerminalID
+            refreshProcessNames()
+            // Refresh sessions every 10s (was 5s) — counter-based to avoid extra timer
+            sessionRefreshCounter += 1
+            if sessionRefreshCounter >= 10 {
+                sessionRefreshCounter = 0
+                Task { await refreshSessions() }
+            }
         }
     }
 
@@ -245,10 +251,8 @@ private struct PaneLeafRow: View {
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(isHovered ? Color.secondary.opacity(0.12) : Color.clear)
-        )
+        .glassEffect(in: RoundedRectangle(cornerRadius: 6))
+        .opacity(isHovered ? 1.0 : 0.85)
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
         .onTapGesture(perform: onFocus)
@@ -296,10 +300,8 @@ private struct OrphanedSessionRow: View {
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(isHovered ? Color.secondary.opacity(0.12) : Color.clear)
-        )
+        .glassEffect(in: RoundedRectangle(cornerRadius: 6))
+        .opacity(isHovered ? 1.0 : 0.85)
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
         .onTapGesture(perform: onRevive)
@@ -569,11 +571,17 @@ class KytosTerminalManager {
     static let shared = KytosTerminalManager()
 
     init() {
-        // Poll at 0.1s to latch whichever TerminalView is currently first responder,
-        // covering the case where the user clicks directly on a terminal (AppKit
-        // calls makeFirstResponder internally without going through KytosRequestFocus).
-        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            _ = self?.activeTerminalID  // side-effect: updates lastKnownActiveTerminalID
+        // Use NSWindow.didBecomeKeyNotification + didResignKeyNotification to latch
+        // whichever TerminalView is the first responder, replacing 0.1s polling timer.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            _ = self?.activeTerminalID
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didUpdateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            _ = self?.activeTerminalID
         }
     }
     
@@ -1345,9 +1353,13 @@ struct PaneWorkspaceView: View {
                             }
                         }
                     } else {
-                        // Last pane removed — show welcome view.
+                        // Last pane removed — close the window instead of leaving
+                        // an empty shell (which triggers WindowGroup state restoration).
                         workspaceBindable.session.layout = .empty
                         KytosAppModel.shared.save()
+                        DispatchQueue.main.async {
+                            NSApplication.shared.keyWindow?.close()
+                        }
                     }
                 }
             }
@@ -1359,8 +1371,9 @@ import Foundation
 private let kLogPath = "/tmp/kytos-debug.log"
 private let kLogLock = NSLock()
 
-func kLog(_ msg: String) {
-    let line = "\(Date()) \(msg)\n"
+#if DEBUG
+func kLog(_ msg: @autoclosure () -> String) {
+    let line = "\(Date()) \(msg())\n"
     guard let data = line.data(using: .utf8) else { return }
     kLogLock.lock()
     defer { kLogLock.unlock() }
@@ -1372,6 +1385,12 @@ func kLog(_ msg: String) {
         FileManager.default.createFile(atPath: kLogPath, contents: data)
     }
 }
+#else
+@inline(__always)
+func kLog(_ msg: @autoclosure () -> String) {
+    // No-op in release builds — avoids all UUID string formatting overhead
+}
+#endif
 
 @main
 struct KytosApp: App {
@@ -1613,7 +1632,7 @@ struct KytosWindowView: View {
         .environment(workspace)
         .focusedSceneValue(\.kytosFocusedWindowID, stableID)
         .background { WindowRegistrar(windowID: stableID) }
-        .onReceive(Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()) { _ in
             windowShellState.subtitle = KytosTerminalManager.shared.activePaneSubtitle()
         }
         .onChange(of: windowShellState.navigatorVisible) { _, _ in
