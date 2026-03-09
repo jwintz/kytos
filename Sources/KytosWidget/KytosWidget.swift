@@ -1,5 +1,5 @@
 // KytosWidget.swift — WidgetKit widget for Kytos terminal app
-// Supports systemSmall, systemMedium, systemLarge (+ systemExtraLarge on iOS)
+// Supports systemSmall, systemMedium, systemLarge
 
 import SwiftUI
 import WidgetKit
@@ -44,13 +44,7 @@ struct KytosWidget: Widget {
         }
         .configurationDisplayName("Kytos")
         .description("Live terminal session stats.")
-        .supportedFamilies({
-            var families: [WidgetFamily] = [.systemSmall, .systemMedium, .systemLarge]
-            #if os(iOS)
-            families.append(.systemExtraLarge)
-            #endif
-            return families
-        }())
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
 
@@ -68,10 +62,6 @@ struct KytosWidgetView: View {
             MediumWidgetView(entry: entry)
         case .systemLarge:
             LargeWidgetView(entry: entry)
-#if os(iOS)
-        case .systemExtraLarge:
-            ExtraLargeWidgetView(entry: entry)
-#endif
         default:
             SmallWidgetView(entry: entry)
         }
@@ -191,74 +181,6 @@ private struct LargeWidgetView: View {
         .padding(.horizontal, 4)
     }
 }
-
-// MARK: - Extra Large (iOS, 2-column grid)
-
-#if os(iOS)
-private struct ExtraLargeWidgetView: View {
-    let entry: KytosWidgetEntry
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "terminal")
-                    .font(.title)
-                    .foregroundStyle(.secondary)
-                VStack(alignment: .leading) {
-                    Text("Kytos")
-                        .font(.title3)
-                        .fontWeight(.semibold)
-                    Text("\(entry.snapshot.windows.count) windows · \(entry.snapshot.totalTerminals) terminals")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-
-            Divider()
-
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                ForEach(entry.snapshot.windows) { window in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "rectangle.split.2x1")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(window.name)
-                                .font(.callout)
-                                .fontWeight(.medium)
-                            Spacer()
-                            Text("\(window.terminalCount)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        ForEach(window.terminals.prefix(3)) { terminal in
-                            Text(terminal.process)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        if window.terminals.count > 3 {
-                            Text("+\(window.terminals.count - 3) more")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .padding(8)
-                    .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            Text("Updated \(entry.snapshot.date, style: .relative) ago")
-                .font(.caption2)
-                .foregroundStyle(.quaternary)
-        }
-        .padding(.horizontal, 4)
-    }
-}
-#endif
 
 // MARK: - Shared Window Row
 

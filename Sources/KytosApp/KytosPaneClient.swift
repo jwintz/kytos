@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import Darwin
 
@@ -810,5 +809,4 @@ private extension Array where Element == UInt8 {
         append(contentsOf: str.utf8)
     }
 }
-#endif
 

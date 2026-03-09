@@ -3,7 +3,6 @@
 import SwiftUI
 import Darwin
 
-#if os(macOS)
 // MARK: - Shared session context
 
 /// Resolved context for the currently focused pane, used by all inspector/utility views.
@@ -25,7 +24,6 @@ struct KytosFocusedSessionContext {
 
 @MainActor
 private func kytosFetchFocusedSession() async -> KytosFocusedSessionContext? {
-    #if os(macOS)
     let active = KytosTerminalManager.shared.activeTerminalID
     let latch = KytosTerminalManager.shared.lastKnownActiveTerminalID
     let terminalID = active ?? latch
@@ -55,9 +53,6 @@ private func kytosFetchFocusedSession() async -> KytosFocusedSessionContext? {
         commandLine: leaf?.commandLine,
         sessionInfo: info
     )
-    #else
-    return nil
-    #endif
 }
 
 // MARK: - Shared panel scaffold
@@ -145,12 +140,10 @@ struct KytosProcessInfoView: View {
                 KytosPanelEmpty(message: "No active terminal pane.")
             }
         }
-        #if os(macOS)
         .task { await refresh() }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
             Task { await refresh() }
         }
-        #endif
     }
 
     // MARK: - Session Header
@@ -289,7 +282,6 @@ struct KytosProcessInfoView: View {
         }
     }
 
-    #if os(macOS)
     @MainActor private func refresh() async {
         ctx = await kytosFetchFocusedSession()
         guard let pid = ctx?.pid else {
@@ -310,7 +302,6 @@ struct KytosProcessInfoView: View {
         processes = result.0
         systemStats = result.1
     }
-    #endif
 }
 
 /// Build a depth-annotated process tree rooted at `rootPID`.
@@ -605,15 +596,12 @@ struct KytosEnvironmentInspectorView: View {
                 .listStyle(.plain)
             }
         }
-        #if os(macOS)
         .task { await refresh() }
         .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in
             Task { await refresh() }
         }
-        #endif
     }
 
-    #if os(macOS)
     @MainActor private func refresh() async {
         let ctx = await kytosFetchFocusedSession()
         guard let p = ctx?.pid else { env = [:]; return }
@@ -626,7 +614,6 @@ struct KytosEnvironmentInspectorView: View {
             }
         }
     }
-    #endif
 }
 
 private struct EnvVarRow: View {
@@ -770,15 +757,12 @@ struct KytosHistoryInspectorView: View {
                 .listStyle(.plain)
             }
         }
-        #if os(macOS)
         .task { await refresh() }
         .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
             Task { await refresh() }
         }
-        #endif
     }
 
-    #if os(macOS)
     @MainActor private func refresh() async {
         let ctx = await kytosFetchFocusedSession()
         guard let p = ctx?.pid else { commands = []; return }
@@ -799,7 +783,6 @@ struct KytosHistoryInspectorView: View {
         }
         commands = entries
     }
-    #endif
 }
 
 private func kytosHistoryFilePath(shell: String, env: [String: String]) -> String {
@@ -923,7 +906,6 @@ struct KytosSearchUtilityView: View {
         return str
     }
 
-    #if os(macOS)
     @MainActor private func runSearch() async {
         guard !query.isEmpty else { return }
         isSearching = true
@@ -953,7 +935,6 @@ struct KytosSearchUtilityView: View {
         }
         results = found
     }
-    #endif
 }
 
 // MARK: - Resources Utility
@@ -995,15 +976,12 @@ struct KytosResourcesUtilityView: View {
                 KytosPanelEmpty(message: "Focus a terminal pane\nto see resource usage.")
             }
         }
-        #if os(macOS)
         .task { await refresh() }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
             Task { await refresh() }
         }
-        #endif
     }
 
-    #if os(macOS)
     @MainActor private func refresh() async {
         let ctx = await kytosFetchFocusedSession()
         guard let pid = ctx?.pid else { info = nil; return }
@@ -1014,7 +992,6 @@ struct KytosResourcesUtilityView: View {
             }
         }
     }
-    #endif
 }
 
 private func kytosReadResourceInfo(pid: pid_t) -> KytosResourcesUtilityView.ResourceInfo? {
@@ -1092,15 +1069,12 @@ struct KytosConnectionsUtilityView: View {
                 .listStyle(.plain)
             }
         }
-        #if os(macOS)
         .task { await refresh() }
         .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in
             Task { await refresh() }
         }
-        #endif
     }
 
-    #if os(macOS)
     @MainActor private func refresh() async {
         let ctx = await kytosFetchFocusedSession()
         guard let p = ctx?.pid else { pid = nil; connections = []; return }
@@ -1111,7 +1085,6 @@ struct KytosConnectionsUtilityView: View {
             }
         }
     }
-    #endif
 }
 
 private func kytosReadConnections(pid: pid_t) -> [KytosConnectionsUtilityView.ConnectionEntry] {
@@ -1144,4 +1117,3 @@ private func kytosReadConnections(pid: pid_t) -> [KytosConnectionsUtilityView.Co
     return entries
 }
 
-#endif

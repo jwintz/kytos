@@ -84,22 +84,12 @@ private struct KytosTerminalSettingsTab: View {
             }
 
             Section("Shell") {
-                #if os(macOS)
                 Picker("Default Shell", selection: $settings.shellChoice) {
                     Text("System Default").tag(KytosSettings.ShellChoice.systemShell)
                 }
                 Text("Changes apply to new terminal sessions.")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                #else
-                Picker("Default Shell", selection: $settings.shellChoice) {
-                    Text("dash (POSIX)").tag(KytosSettings.ShellChoice.dash)
-                }
-                .disabled(true)
-                Text("iOS uses dash via ios_system.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                #endif
             }
         }
         .formStyle(.grouped)

@@ -1,7 +1,5 @@
 import SwiftUI
-#if os(macOS)
 import AppKit
-#endif
 import UniformTypeIdentifiers
 import WidgetKit
 
@@ -171,7 +169,6 @@ public enum PaneLayoutTree: Codable, Hashable {
         }
     }
 
-    #if os(macOS)
     func allPaneSessionIDs() -> [String] {
         switch self {
         case .empty: return []
@@ -233,7 +230,6 @@ public enum PaneLayoutTree: Codable, Hashable {
             )
         }
     }
-    #endif
 }
 
 public struct KytosSession: Identifiable, Codable, Hashable {
@@ -285,7 +281,6 @@ public final class KytosAppModel {
 
     public var windows: [UUID: KytosWorkspace] = [:]
 
-    #if os(macOS)
     /// Set after `reconcileSessionsOnLaunch` completes. Gates `initPaneSession`
     /// to prevent using stale session IDs before dedup/clearing runs.
     @ObservationIgnored public private(set) var reconciliationDone = false
@@ -315,7 +310,6 @@ public final class KytosAppModel {
             cont.resume()
         }
     }
-    #endif
 
     private init() {
         load()
@@ -346,11 +340,9 @@ public final class KytosAppModel {
     /// Used at quit time to snapshot tab group structure.
     @ObservationIgnored public var windowToID: [ObjectIdentifier: UUID] = [:]
 
-    #if os(macOS)
     public func registerWindow(_ window: NSWindow, for id: UUID) {
         windowToID[ObjectIdentifier(window)] = id
     }
-    #endif
 
     public func workspace(for windowID: UUID) -> KytosWorkspace {
         if let existing = windows[windowID] {
@@ -413,13 +405,9 @@ public final class KytosAppModel {
         let windowList = windows.values.map { workspace -> KytosWidgetWindow in
             let leaves = workspace.session.layout.allTerminalLeaves()
             let terminals = leaves.map { leaf -> KytosWidgetTerminal in
-                #if os(macOS)
                 let process = KytosTerminalManager.shared.foregroundProcessName(for: leaf.id)
                     ?? leaf.commandLine?.first
                     ?? "zsh"
-                #else
-                let process = leaf.commandLine?.first ?? "dash"
-                #endif
                 return KytosWidgetTerminal(id: leaf.id, process: process)
             }
             return KytosWidgetWindow(id: workspace.session.id, name: workspace.session.name, terminals: terminals)
@@ -449,7 +437,6 @@ public final class KytosAppModel {
 
     /// Reads the live NSWindowTabGroup state and persists which UUIDs were tabbed together.
     private func saveTabGroups() {
-        #if os(macOS)
         var groups: [[UUID]] = []
         var processed = Set<ObjectIdentifier>()
         for window in NSApp.windows where !(window is NSPanel) && window.contentView != nil {
@@ -467,7 +454,6 @@ public final class KytosAppModel {
             UserDefaults.standard.set(data, forKey: "KytosAppModel_TabGroups_v1")
             kLog("[KytosDebug][AppModel] saveTabGroups() — \(groups.count) group(s)")
         }
-        #endif
     }
 
     /// Returns saved tab groups from the previous session, or an empty array.
@@ -481,9 +467,7 @@ public final class KytosAppModel {
         kLog("[KytosDebug][AppModel] load()")
         guard let data = UserDefaults.standard.data(forKey: "KytosAppModel_Windows_v5") else {
             kLog("[KytosDebug][AppModel] load() — no saved data")
-            #if os(macOS)
             signalReconciliationDone()
-            #endif
             return
         }
         do {
@@ -496,16 +480,13 @@ public final class KytosAppModel {
         } catch {
             kLog("[KytosDebug][AppModel] load() DECODE FAILED: \(error)")
         }
-        #if os(macOS)
         // Reconcile on a background thread to avoid blocking the main thread with
         // socket I/O during app launch (server startup can take up to 2.5s).
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             reconcileSessionsOnLaunch()
         }
-        #endif
     }
 
-    #if os(macOS)
     /// Cross-references persisted paneSessionIDs with the live pane server.
     /// Sessions that no longer exist (server restarted or timed out) have their IDs cleared
     /// so they'll be recreated fresh when the terminal view appears.
@@ -552,5 +533,4 @@ public final class KytosAppModel {
             signalReconciliationDone()
         }
     }
-    #endif
 }

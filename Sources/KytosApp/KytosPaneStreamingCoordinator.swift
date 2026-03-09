@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import SwiftTerm
 
@@ -434,4 +433,3 @@ final class KytosPaneStreamingCoordinator: MacOSLocalProcessTerminalCoordinator 
         // pane server manages process lifecycle; we don't handle this here
     }
 }
-#endif

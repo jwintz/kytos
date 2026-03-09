@@ -2,13 +2,8 @@ import SwiftUI
 import SwiftTerm
 import Observation
 
-#if os(macOS)
 import AppKit
 public typealias KytosFont = NSFont
-#else
-import UIKit
-public typealias KytosFont = UIFont
-#endif
 
 @Observable
 public final class KytosSettings {
@@ -52,11 +47,7 @@ public final class KytosSettings {
     }
     
     public enum ShellChoice: String, CaseIterable, Identifiable {
-        #if os(iOS)
-        case dash = "dash"
-        #else
         case systemShell = "System Shell"
-        #endif
         public var id: String { rawValue }
     }
     
@@ -84,11 +75,7 @@ public final class KytosSettings {
         let defaults = UserDefaults.standard
 
         // Defaults
-        #if os(iOS)
-        let defaultShell = ShellChoice.dash.rawValue
-        #else
         let defaultShell = ShellChoice.systemShell.rawValue
-        #endif
         defaults.register(defaults: [
             cursorStyleKey: "steadyBlock",
             cursorBlinkKey: false,
@@ -114,11 +101,7 @@ public final class KytosSettings {
         if let shellRaw = defaults.string(forKey: shellChoiceKey), let choice = ShellChoice(rawValue: shellRaw) {
             self.shellChoice = choice
         } else {
-            #if os(iOS)
-            self.shellChoice = .dash
-            #else
             self.shellChoice = .systemShell
-            #endif
         }
 
         self.horizontalMargin = CGFloat(defaults.double(forKey: horizontalMarginKey))
@@ -132,23 +115,14 @@ public final class KytosSettings {
     }
     
     public func resolvedCommandLine() -> [String] {
-        #if os(macOS)
         switch shellChoice {
         case .systemShell:  return [ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"]
         }
-        #else
-        return ["dash"]
-        #endif
     }
 
     public var nsFont: KytosFont {
-        #if os(macOS)
         return NSFont(name: fontFamily, size: fontSize) ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        #else
-        return UIFont(name: fontFamily, size: fontSize) ?? UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        #endif
     }
-#if os(macOS)
     public static let availableFonts: [String] = {
         let manager = NSFontManager.shared
         let allFamilies = manager.availableFontFamilies
@@ -161,16 +135,4 @@ public final class KytosSettings {
         if !monospaced.contains("SF Mono") { monospaced.insert("SF Mono", at: 0) }
         return monospaced
     }()
-#else
-    public static let availableFonts: [String] = {
-        var monospaced: [String] = []
-        for family in UIFont.familyNames {
-            if let font = UIFont(name: family, size: 12), font.fontDescriptor.symbolicTraits.contains(.traitMonoSpace) {
-                monospaced.append(family)
-            }
-        }
-        if !monospaced.contains("Menlo") { monospaced.insert("Menlo", at: 0) }
-        return monospaced
-    }()
-#endif
 }

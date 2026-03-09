@@ -35,11 +35,7 @@ enum KytosInspectorTab: String, CaseIterable, KelyphosPanel {
     var body: some View {
         switch self {
         case .process:
-            #if os(macOS)
             KytosProcessInfoView()
-            #else
-            EmptyView()
-            #endif
         }
     }
 }
@@ -64,10 +60,8 @@ enum KytosUtilityTab: CaseIterable, KelyphosPanel {
 
 struct KytosSessionsSidebar: View {
     @Environment(KytosWorkspace.self) private var workspace
-    #if os(macOS)
     @State private var liveSessions: [String: KytosPaneSessionInfo] = [:]
     @State private var foregroundProcessNames: [UUID: String] = [:]
-    #endif
     @State private var trackedFocusedID: UUID?
 
     var body: some View {
@@ -82,7 +76,6 @@ struct KytosSessionsSidebar: View {
                 }
             }
 
-            #if os(macOS)
             let leaves = workspaceBindable.session.layout.allTerminalLeaves()
             Section(header: Text("Panes")) {
                 if leaves.isEmpty {
@@ -129,10 +122,8 @@ struct KytosSessionsSidebar: View {
                     }
                 }
             }
-            #endif
         }
         .listStyle(.sidebar)
-        #if os(macOS)
         .task { await refreshSessions() }
         .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
             Task { await refreshSessions() }
@@ -143,10 +134,8 @@ struct KytosSessionsSidebar: View {
         .onReceive(Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()) { _ in
             trackedFocusedID = KytosTerminalManager.shared.activeTerminalID
         }
-        #endif
     }
 
-    #if os(macOS)
     @MainActor
     private func refreshSessions() async {
         let result = await withCheckedContinuation { cont in
@@ -195,10 +184,8 @@ struct KytosSessionsSidebar: View {
             NotificationCenter.default.post(name: NSNotification.Name("KytosLayoutChanged"), object: nil)
         }
     }
-    #endif
 }
 
-#if os(macOS)
 private struct PaneLeafRow: View {
     let terminalID: UUID
     let commandLine: [String]?
@@ -318,23 +305,13 @@ private struct OrphanedSessionRow: View {
         .onTapGesture(perform: onRevive)
     }
 }
-#endif
 
-#if os(macOS)
 import AppKit
 import Darwin
 typealias PlatformViewRepresentable = NSViewRepresentable
-#else
-import UIKit
-typealias PlatformViewRepresentable = UIViewRepresentable
-#endif
 import SwiftTerm
 
-#if os(macOS)
 typealias OSColor = NSColor
-#else
-typealias OSColor = UIColor
-#endif
 
 func loadITermColors(from url: URL, into terminalView: TerminalView) {
     guard let dict = NSDictionary(contentsOf: url) as? [String: Any] else { return }
@@ -344,11 +321,7 @@ func loadITermColors(from url: URL, into terminalView: TerminalView) {
               let r = colorDict["Red Component"] as? CGFloat,
               let g = colorDict["Green Component"] as? CGFloat,
               let b = colorDict["Blue Component"] as? CGFloat else { return nil }
-        #if os(macOS)
         return NSColor(calibratedRed: r, green: g, blue: b, alpha: 1.0)
-        #else
-        return UIColor(red: r, green: g, blue: b, alpha: 1.0)
-        #endif
     }
     
     if let bg = parseColor("Background Color") {
@@ -381,7 +354,6 @@ func loadITermColors(from url: URL, into terminalView: TerminalView) {
     }
 }
 
-#if os(macOS)
 class MacOSLocalProcessTerminalCoordinator: NSObject, TerminalViewDelegate, LocalProcessDelegate {
     
     // MARK: - LocalProcessDelegate Requirements
@@ -453,28 +425,6 @@ class MacOSLocalProcessTerminalCoordinator: NSObject, TerminalViewDelegate, Loca
         kLog("[KytosDebug] Shell launched calling startProcess")
     }
 }
-#else
-// iOS — ios_system coordinator (see KytosIOSSystemCoordinator.swift)
-class MacOSLocalProcessTerminalCoordinator: NSObject, TerminalViewDelegate {
-    var terminalView: TerminalView?
-    var terminalID: UUID?
-    var lastCols: Int = -1
-    var lastRows: Int = -1
-
-    func sizeChanged(source: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {}
-    func setTerminalTitle(source: SwiftTerm.TerminalView, title: String) {}
-    func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {}
-    func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {}
-    func scrolled(source: SwiftTerm.TerminalView, position: Double) {}
-    func requestOpenLink(source: SwiftTerm.TerminalView, link: String, params: [String : String]) {}
-    func bell(source: SwiftTerm.TerminalView) {}
-    func clipboardCopy(source: SwiftTerm.TerminalView, content: Data) {}
-    func iTermContent(source: SwiftTerm.TerminalView, content: ArraySlice<UInt8>) {}
-    func rangeChanged(source: SwiftTerm.TerminalView, startY: Int, endY: Int) {}
-
-    func start(commandLine: [String]? = nil) {}
-}
-#endif
 
 struct FocusedTerminalIDKey: FocusedValueKey {
     typealias Value = UUID
@@ -506,10 +456,8 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
         var lastSettingsHash: Int = 0
 
         deinit {
-            #if os(macOS)
             if let obs = layoutObserver { NotificationCenter.default.removeObserver(obs) }
             if let obs = retryObserver  { NotificationCenter.default.removeObserver(obs) }
-            #endif
         }
     }
 
@@ -538,7 +486,6 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
             colorFileLoaded = false
         }
         view.font = settings.nsFont
-        #if os(macOS)
         // Combine shape and blink into a single CursorStyle value.
         let effectiveStyle: CursorStyle
         switch settings.cursorStyle {
@@ -553,9 +500,6 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
         // The user's explicit picker choice is respected only when no custom palette is active.
         view.terminal.ansi256PaletteStrategy = colorFileLoaded ? .base16Lab : settings.ansi256Palette
         view.needsDisplay = true
-        #else
-        view.setNeedsDisplay()
-        #endif
     }
 
     // MARK: - iOS
@@ -577,7 +521,6 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
     }
 
     // MARK: - macOS
-    #if os(macOS)
     func makeNSView(context: Context) -> TerminalView {
         let terminal = KytosTerminalManager.shared.getOrCreateTerminal(
             id: terminalID, colorScheme: colorScheme,
@@ -620,30 +563,23 @@ struct PaneWorkspaceTerminalRepresentable: PlatformViewRepresentable {
         context.coordinator.lastSettingsHash = hash
         updateTerminalAppearance(nsView)
     }
-    #endif
 }
 
 class KytosTerminalManager {
     static let shared = KytosTerminalManager()
 
     init() {
-        #if os(macOS)
         // Poll at 0.1s to latch whichever TerminalView is currently first responder,
         // covering the case where the user clicks directly on a terminal (AppKit
         // calls makeFirstResponder internally without going through KytosRequestFocus).
         Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             _ = self?.activeTerminalID  // side-effect: updates lastKnownActiveTerminalID
         }
-        #endif
     }
     
     struct ManagedTerminal {
         let view: TerminalView
-        #if os(macOS)
         let coordinator: MacOSLocalProcessTerminalCoordinator
-        #else
-        let coordinator: KytosIOSSystemCoordinator
-        #endif
     }
     
     private var terminals: [UUID: ManagedTerminal] = [:]
@@ -663,9 +599,7 @@ class KytosTerminalManager {
         if let tv = terminals[id]?.view {
             let size = fontSizeOverrides[id]!
             let fontName = KytosSettings.shared.fontFamily
-            #if os(macOS)
             tv.font = NSFont(name: fontName, size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
-            #endif
         }
     }
 
@@ -674,9 +608,7 @@ class KytosTerminalManager {
         if let tv = terminals[id]?.view {
             let size = KytosSettings.shared.fontSize
             let fontName = KytosSettings.shared.fontFamily
-            #if os(macOS)
             tv.font = NSFont(name: fontName, size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
-            #endif
         }
     }
 
@@ -719,14 +651,10 @@ class KytosTerminalManager {
     var lastKnownActiveTerminalID: UUID?
 
     var activeTerminalID: UUID? {
-        #if os(macOS)
         guard let firstResponder = NSApplication.shared.keyWindow?.firstResponder as? TerminalView else { return nil }
         let found = terminals.first(where: { $0.value.view === firstResponder })?.key
         if let found { lastKnownActiveTerminalID = found }
         return found
-        #else
-        return nil
-        #endif
     }
 
     /// Call this immediately after making a terminal the first responder so the latch
@@ -738,13 +666,9 @@ class KytosTerminalManager {
     /// Close all streaming connections to break blocking reads during app quit.
     func disconnectAll() {
         for (_, managed) in terminals {
-            #if os(macOS)
             if let streaming = managed.coordinator as? KytosPaneStreamingCoordinator {
                 streaming.disconnect()
             }
-            #else
-            managed.coordinator.disconnect()
-            #endif
         }
     }
     
@@ -753,13 +677,9 @@ class KytosTerminalManager {
             return existing
         }
         kLog("[KytosDebug][TermMgr] getOrCreateTerminal id=\(id.uuidString.prefix(8)) paneSessionID=\(paneSessionID ?? "nil")")
-        #if os(macOS)
         let coordinator: MacOSLocalProcessTerminalCoordinator = paneSessionID != nil
             ? KytosPaneStreamingCoordinator()
             : MacOSLocalProcessTerminalCoordinator()
-        #else
-        let coordinator = KytosIOSSystemCoordinator()
-        #endif
         coordinator.terminalID = id
         
         // Use .zero — SwiftUI layout delivers the real size before the first sizeChanged,
@@ -767,36 +687,22 @@ class KytosTerminalManager {
         let terminal = TerminalView(frame: .zero)
         // NOTE: scrollback is applied later in sizeChanged (after setupOptions runs)
         // because setupOptions creates fresh TerminalOptions with default scrollback.
-        #if os(macOS)
         terminal.autoresizingMask = [.width, .height]
         terminal.setContentHuggingPriority(.defaultLow, for: .horizontal)
         terminal.setContentHuggingPriority(.defaultLow, for: .vertical)
         terminal.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         terminal.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
-        #else
-        terminal.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        terminal.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        terminal.setContentHuggingPriority(.defaultLow, for: .vertical)
-        terminal.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        terminal.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
-        #endif
         
         // Colors, font, and cursor style are applied by updateTerminalAppearance in the
         // representable's makeNSView/makeUIView immediately after getOrCreateTerminal returns.
         // No need to call loadITermColors here; doing so would apply colors twice.
 
-        #if os(macOS)
         terminal.nativeBackgroundColor = .clear
         terminal.layer?.backgroundColor = NSColor.clear.cgColor
         terminal.layer?.isOpaque = false
-        #else
-        terminal.nativeBackgroundColor = .clear
-        terminal.isOpaque = false
-        #endif
         
         coordinator.terminalView = terminal
         terminal.terminalDelegate = coordinator
-        #if os(macOS)
         // Check for session ID collision: if another terminal already has this session ID,
         // clear it to prevent both terminals sharing the same pane session.
         var effectiveSID = paneSessionID
@@ -815,11 +721,7 @@ class KytosTerminalManager {
         } else {
             coordinator.start(commandLine: commandLine)
         }
-        #else
-        coordinator.start(commandLine: commandLine)
-        #endif
         
-        #if os(macOS)
         // Listen for internal routing to become first responder
         NotificationCenter.default.addObserver(forName: NSNotification.Name("KytosRequestFocus"), object: nil, queue: .main) { [weak terminal] notification in
             guard let terminal = terminal,
@@ -907,7 +809,6 @@ class KytosTerminalManager {
                 becameKeyObserver = nil
             }
         }
-        #endif
         
         let managed = ManagedTerminal(view: terminal, coordinator: coordinator)
         terminals[id] = managed
@@ -918,15 +819,9 @@ class KytosTerminalManager {
         return terminals[id]
     }
 
-    #if os(macOS)
     func coordinator(for id: UUID) -> MacOSLocalProcessTerminalCoordinator? {
         terminals[id]?.coordinator
     }
-    #else
-    func coordinator(for id: UUID) -> KytosIOSSystemCoordinator? {
-        terminals[id]?.coordinator
-    }
-    #endif
 
     func removeTerminal(id: UUID) {
         terminals.removeValue(forKey: id)
@@ -942,7 +837,6 @@ class KytosTerminalManager {
     }
 
     // MARK: - Active pane subtitle (process name — cwd)
-    #if os(macOS)
     private var cachedSessionPIDs: [String: pid_t] = [:]
 
     /// Returns the window subtitle for the currently active pane: "process — ~/path".
@@ -1010,7 +904,6 @@ class KytosTerminalManager {
         proc_name(shellPid, &buf, UInt32(buf.count))
         return String(cString: &buf)
     }
-    #endif
 }
 
 struct PaneWorkspaceTerminalView: View {
@@ -1029,7 +922,6 @@ struct PaneWorkspaceTerminalView: View {
     @State private var streamFailed: Bool = false
 
     var body: some View {
-        #if os(macOS)
         Group {
             if paneInitDone {
                 ZStack {
@@ -1080,37 +972,8 @@ struct PaneWorkspaceTerminalView: View {
             }
             kLog("[KytosDebug][initPaneSession] session replaced: \(oldID) → \(newID)")
         }
-        #else
-        PaneWorkspaceTerminalRepresentable(
-            terminalID: terminalID,
-            commandLine: commandLine,
-            paneSessionID: nil,
-            colorScheme: colorScheme,
-            settings: settings
-        )
-        .background(Color.clear)
-        .focusable()
-        .focused($isFocused)
-        .focusedValue(\.kytosFocusedTerminalID, isFocused ? terminalID : nil)
-        .onTapGesture {
-            isFocused = true
-            NotificationCenter.default.post(name: NSNotification.Name("KytosRequestFocus"), object: terminalID)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosWorkspaceAction"))) { notification in
-            guard let userInfo = notification.userInfo,
-                  let id = userInfo["id"] as? UUID,
-                  id == terminalID,
-                  let action = userInfo["action"] as? String else { return }
-            switch action {
-            case "splitHorizontal": split(axis: .horizontal)
-            case "splitVertical": split(axis: .vertical)
-            default: break
-            }
-        }
-        #endif
     }
 
-    #if os(macOS)
     /// Overlay shown when the streaming coordinator failed to receive a snapshot.
     @ViewBuilder private var streamFailedOverlay: some View {
         ZStack {
@@ -1218,7 +1081,6 @@ struct PaneWorkspaceTerminalView: View {
         }
         paneInitDone = true
     }
-    #endif
     
     private func split(axis: PaneLayoutTree.Axis) {
         let newID = UUID()
@@ -1231,13 +1093,11 @@ struct PaneWorkspaceTerminalView: View {
         layout = newTree
         KytosAppModel.shared.save()
         // Resign focus on the old terminal so its cursor becomes hollow
-        #if os(macOS)
         if let oldTerminal = KytosTerminalManager.shared.getExistingTerminal(id: terminalID)?.view,
            let window = oldTerminal.window {
             kLog("[KytosDebug][Split] Resigning focus on old terminal \(terminalID.uuidString.prefix(8))")
             window.makeFirstResponder(nil)
         }
-        #endif
         // Request focus on the new pane once its stream is attached
         var focusObserver: NSObjectProtocol?
         focusObserver = NotificationCenter.default.addObserver(
@@ -1332,18 +1192,14 @@ struct PaneLayoutTreeView: View {
                 .frame(width: 5)
                 .contentShape(Rectangle().size(width: 11, height: .infinity))
                 .gesture(drag)
-                #if os(macOS)
                 .onHover { h in if h { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
-                #endif
         } else {
             Rectangle()
                 .fill(Color.secondary.opacity(0.3))
                 .frame(height: 5)
                 .contentShape(Rectangle().size(width: .infinity, height: 11))
                 .gesture(drag)
-                #if os(macOS)
                 .onHover { h in if h { NSCursor.resizeUpDown.push() } else { NSCursor.pop() } }
-                #endif
         }
     }
 
@@ -1473,25 +1329,21 @@ struct PaneWorkspaceView: View {
                         }
                     }
                 } else if action == "closePane" {
-                    #if os(macOS)
                     // Destroy the pane session if one is attached to this leaf.
                     if case .terminal(_, _, let sid?) = rootLayout.find(id: id) {
                         DispatchQueue.global(qos: .background).async {
                             try? KytosPaneClient.shared.destroySession(id: sid)
                         }
                     }
-                    #endif
                     if let newLayout = rootLayout.removing(id: id) {
                         workspaceBindable.session.layout = newLayout
                         KytosAppModel.shared.save()
                         // Focus the nearest remaining pane so CMD+W doesn't accidentally close the window.
-                        #if os(macOS)
                         if let focusID = newLayout.firstLeafID() {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                                 NotificationCenter.default.post(name: NSNotification.Name("KytosRequestFocus"), object: focusID)
                             }
                         }
-                        #endif
                     } else {
                         // Last pane removed — show welcome view.
                         workspaceBindable.session.layout = .empty
@@ -1532,7 +1384,6 @@ struct KytosApp: App {
     @Environment(\.openWindow) private var openWindow
 
     init() {
-        #if os(macOS)
         // Ensure the app comes to the front when launched (e.g. via `open -W`).
         DispatchQueue.main.async {
             NSApplication.shared.activate()
@@ -1604,11 +1455,9 @@ struct KytosApp: App {
                 _exit(0)
             }
         }
-        #endif
     }
     
     var body: some Scene {
-        #if os(macOS)
         mainWindowGroup
             .commands {
                 KytosWorkspaceCommands()
@@ -1617,45 +1466,15 @@ struct KytosApp: App {
         Settings {
             KytosSettingsWindowView(shellState: settingsShellState)
         }
-        #else
-        mainWindowGroup
-            .commands {
-                KytosWorkspaceCommands()
-            }
-        #endif
     }
     
     private var mainWindowGroup: some Scene {
-        #if os(macOS)
         WindowGroup("Kytos", id: "main", for: UUID.self) { $windowID in
             KytosWindowView(windowID: $windowID, appModel: appModel)
         }
-        #else
-        WindowGroup("Kytos") {
-            let workspace = appModel.workspace(for: UUID())
-            
-            KelyphosShellView(
-                state: settingsShellState,
-                configuration: KelyphosShellConfiguration(
-                    navigatorTabs: KytosNavigatorTab.allCases,
-                    inspectorTabs: KytosInspectorTab.allCases,
-                    utilityTabs: KytosUtilityTab.allCases,
-                    scrollable: false,
-                    settingsView: {
-                        AnyView(KytosSettingsWindowView(shellState: settingsShellState))
-                    },
-                    detail: { 
-                        PaneWorkspaceView()
-                    }
-                )
-            )
-            .environment(workspace)
-        }
-        #endif
     }
 }
 
-#if os(macOS)
 struct KytosWindowView: View {
     @Binding var windowID: UUID?
     @State private var stableID: UUID
@@ -1794,11 +1613,9 @@ struct KytosWindowView: View {
         .environment(workspace)
         .focusedSceneValue(\.kytosFocusedWindowID, stableID)
         .background { WindowRegistrar(windowID: stableID) }
-        #if os(macOS)
         .onReceive(Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()) { _ in
             windowShellState.subtitle = KytosTerminalManager.shared.activePaneSubtitle()
         }
-        #endif
         .onChange(of: windowShellState.navigatorVisible) { _, _ in
             refocusActiveTerminal()
             windowShellState.savePanelState()
@@ -1861,11 +1678,9 @@ struct KytosWindowView: View {
         }
     }
 }
-#endif
 
 /// Zero-size background view that registers an NSWindow with KytosAppModel
 /// so tab group structure can be snapshotted at quit time.
-#if os(macOS)
 private struct WindowRegistrar: NSViewRepresentable {
     let windowID: UUID
 
@@ -1886,7 +1701,6 @@ private struct WindowRegistrar: NSViewRepresentable {
         }
     }
 }
-#endif
 
 struct KytosWorkspaceCommands: Commands {
     @FocusedValue(\.kytosFocusedTerminalID) var focusedID

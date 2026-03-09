@@ -1,5 +1,5 @@
 // KytosWidgetSnapshot.swift — shared data model between app and widget targets
-// Linked into: Kytos-macOS, Kytos-iOS, Kytos-Widget-macOS, Kytos-Widget-iOS
+// Linked into: Kytos-macOS, Kytos-Widget-macOS
 
 import Foundation
 
@@ -27,40 +27,25 @@ public struct KytosWidgetSnapshot: Codable {
     }
 
     private static let widgetBundleID = "me.jwintz.Kytos.KytosWidget"
-    #if os(iOS)
-    private static let appGroupID = "group.me.jwintz.Syntropment"
-    #else
     private static let appGroupID = "group.me.jwintz.Kytos"
-    #endif
 
     /// Shared URL for widget snapshot data.
-    /// - macOS: The unsandboxed main app writes directly into the widget's container.
-    ///   The sandboxed widget reads from its own Application Support.
-    /// - iOS: Both app and widget use the shared App Group container.
+    /// The unsandboxed main app writes directly into the widget's container.
+    /// The sandboxed widget reads from its own Application Support.
     private static var sharedURL: URL {
         let dir: URL
-        #if os(iOS)
-        dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)!
-            .appendingPathComponent("Kytos", isDirectory: true)
-        #else
         dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("Kytos", isDirectory: true)
-        #endif
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("widget-snapshot.json")
     }
 
     /// URL used by the main app (unsandboxed on macOS) to write widget data.
     public static var appWriteURL: URL {
-        #if os(macOS)
         let home = FileManager.default.homeDirectoryForCurrentUser
         let dir = home
             .appendingPathComponent("Library/Containers/\(widgetBundleID)/Data/Library/Application Support/Kytos", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("widget-snapshot.json")
-        #else
-        return sharedURL
-        #endif
     }
 
     public static func read() -> KytosWidgetSnapshot? {

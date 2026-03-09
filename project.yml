@@ -3,7 +3,6 @@ options:
   bundleIdPrefix: me.jwintz
   deploymentTarget:
     macOS: 26.0
-    iOS: 26.0
 settings:
   DEVELOPMENT_TEAM: H4T77W7K9A
   CODE_SIGN_STYLE: Automatic
@@ -13,13 +12,6 @@ packages:
     path: ../kelyphos
   SwiftTerm:
     path: Submodules/SwiftTerm
-  ios_system:
-    url: https://github.com/holzschu/ios_system.git
-    from: 3.0.4
-  # network_ios deferred — upstream checksum mismatch (v0.3.0 references v0.2 binary with wrong hash)
-  # network_ios:
-  #   url: https://github.com/holzschu/network_ios.git
-  #   from: 0.2.0
 
 targets:
   Kytos-macOS:
@@ -124,81 +116,12 @@ targets:
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.KytosTests
       GENERATE_INFOPLIST_FILE: YES
 
-  Kytos-iOS:
-    type: application
-    platform: iOS
-    sources:
-      - path: Sources/KytosApp
-      - path: Sources/KytosWidget/KytosWidgetSnapshot.swift
-    dependencies:
-      - package: Kelyphos
-        product: KelyphosKit
-      - package: SwiftTerm
-        product: SwiftTerm
-      - target: Kytos-Widget-iOS
-        embed: true
-        codeSign: true
-      - package: ios_system
-        product: ios_system
-    info:
-      path: Sources/KytosApp/Info.plist
-      properties:
-        UIApplicationSupportsMultipleScenes: true
-        UILaunchScreen: {}
-        CFBundleName: Kytos
-        CFBundleDisplayName: Kytos
-    settings:
-      PRODUCT_NAME: Kytos
-      PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos
-      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-    entitlements:
-      path: Sources/KytosApp/Kytos-iOS.entitlements
-      properties:
-        com.apple.security.application-groups:
-          - group.me.jwintz.Syntropment
-
-  Kytos-Widget-iOS:
-    type: app-extension
-    platform: iOS
-    sources:
-      - path: Sources/KytosWidget
-    dependencies:
-      - sdk: WidgetKit.framework
-      - sdk: SwiftUI.framework
-    info:
-      path: Sources/KytosWidget/Info.plist
-      properties:
-        CFBundleName: KytosWidget
-        CFBundleDisplayName: Kytos Widget
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.widgetkit-extension
-    settings:
-      PRODUCT_NAME: KytosWidget
-      PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos.KytosWidget
-      SKIP_INSTALL: YES
-      ENABLE_APP_SANDBOX: YES
-      APPLICATION_EXTENSION_API_ONLY: YES
-      DEAD_CODE_STRIPPING: NO
-      LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../Frameworks"
-    entitlements:
-      path: Sources/KytosWidget/KytosWidget-iOS.entitlements
-      properties:
-        com.apple.security.application-groups:
-          - group.me.jwintz.Syntropment
-
 schemes:
   Kytos-macOS:
     build:
       targets:
         Kytos-macOS: all
         Kytos-Widget-macOS: all
-    run:
-      config: Debug
-  Kytos-iOS:
-    build:
-      targets:
-        Kytos-iOS: all
-        Kytos-Widget-iOS: all
     run:
       config: Debug
   Kytos-Tests:
