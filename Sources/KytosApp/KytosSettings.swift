@@ -121,7 +121,14 @@ public final class KytosSettings {
     }
 
     public var nsFont: KytosFont {
-        return NSFont(name: fontFamily, size: fontSize) ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        let font: KytosFont
+        if let f = NSFontManager.shared.font(withFamily: fontFamily, traits: [], weight: 5, size: fontSize) {
+            font = f
+        } else {
+            font = NSFont(name: fontFamily, size: fontSize) ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        }
+        print("[KytosDebug][Font] Resolved '\(fontFamily)' to: \(font.fontName) (displayName: \(font.displayName ?? "nil"))")
+        return font
     }
     public static let availableFonts: [String] = {
         let manager = NSFontManager.shared

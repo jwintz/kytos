@@ -607,7 +607,11 @@ class KytosTerminalManager {
         if let tv = terminals[id]?.view {
             let size = fontSizeOverrides[id]!
             let fontName = KytosSettings.shared.fontFamily
-            tv.font = NSFont(name: fontName, size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+            let font = NSFontManager.shared.font(withFamily: fontName, traits: [], weight: 5, size: size) 
+                ?? NSFont(name: fontName, size: size) 
+                ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+            tv.font = font
+            print("[KytosDebug][Font] Override for \(id.uuidString.prefix(8)): \(font.fontName)")
         }
     }
 
@@ -616,7 +620,11 @@ class KytosTerminalManager {
         if let tv = terminals[id]?.view {
             let size = KytosSettings.shared.fontSize
             let fontName = KytosSettings.shared.fontFamily
-            tv.font = NSFont(name: fontName, size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+            let font = NSFontManager.shared.font(withFamily: fontName, traits: [], weight: 5, size: size)
+                ?? NSFont(name: fontName, size: size)
+                ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+            tv.font = font
+            print("[KytosDebug][Font] Reset for \(id.uuidString.prefix(8)): \(font.fontName)")
         }
     }
 

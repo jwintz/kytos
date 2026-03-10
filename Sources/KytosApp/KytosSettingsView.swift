@@ -42,7 +42,7 @@ private struct KytosTerminalSettingsTab: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Text("The quick brown fox jumps over the lazy dog.")
-                        .font(Font.custom(settings.fontFamily, size: settings.fontSize))
+                        .font(Font(settings.nsFont))
                         .padding()
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .glassEffect(in: RoundedRectangle(cornerRadius: 8))
