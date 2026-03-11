@@ -5,7 +5,14 @@ description = "A terminal emulator for macOS"
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "osx-64"]
 
+[dependencies]
+tmux = ">=3.6"
+zig = ">=0.13"
+gettext = ">=0.22"
+
 [tasks]
+# Build GhosttyKit.xcframework from Ghostty source.
+build-ghostty = { cmd = "bash -c 'set -e; cd /Users/jwintz/Syntropment/ghostty && zig build -Doptimize=ReleaseFast -Demit-xcframework -Dxcframework-target=native && mkdir -p \"$PIXI_PROJECT_ROOT/Frameworks\" && rm -rf \"$PIXI_PROJECT_ROOT/Frameworks/GhosttyKit.xcframework\" && cp -R macos/GhosttyKit.xcframework \"$PIXI_PROJECT_ROOT/Frameworks/\"'", description = "Build GhosttyKit.xcframework from Ghostty source" }
 # Force-regenerate the Xcode project from project.yml (always runs XcodeGen).
 generate = "swift run xcodegen generate --spec project.yml"
 
@@ -14,25 +21,25 @@ generate = "swift run xcodegen generate --spec project.yml"
 generate-if-needed = "bash -c 'test Kytos.xcodeproj/project.pbxproj -nt project.yml || swift run xcodegen generate --spec project.yml'"
 
 # Always build (use for forced rebuild).
-build = { cmd = "xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates", depends-on = ["generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
+build = { cmd = "xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates", depends-on = ["build-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
 # Build only when sources, project, or submodules are newer than the built binary.
-build-if-needed = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); BIN=\"$BUILT/Kytos.app/Contents/MacOS/Kytos\"; if [ -f \"$BIN\" ] && [ -z \"$(find Sources Submodules project.yml Kytos.xcodeproj/project.pbxproj -newer \"$BIN\" 2>/dev/null | head -1)\" ]; then echo \"Build up to date.\"; else xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates; fi'", depends-on = ["generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
-# Run unit tests (scrollback logic + ANSI encoding).
+build-if-needed = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); BIN=\"$BUILT/Kytos.app/Contents/MacOS/Kytos\"; if [ -f \"$BIN\" ] && [ -z \"$(find Sources Frameworks project.yml Kytos.xcodeproj/project.pbxproj -newer \"$BIN\" 2>/dev/null | head -1)\" ]; then echo \"Build up to date.\"; else xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates; fi'", depends-on = ["generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
+# Run unit tests.
 test = { cmd = "bash Scripts/run-tests.sh", depends-on = ["generate-if-needed"] }
 
 # Remove all build artifacts, derived data, and generated project for a pristine rebuild.
 distclean = "rm -rf .build Kytos.xcodeproj DerivedData build && xcodebuild -alltargets clean 2>/dev/null; echo 'distclean complete'"
 
-# Build if needed, kill old pane daemon, launch app.
-run = { cmd = "bash -c 'PID=$(cat /tmp/pane-$(id -u)/pane.pid 2>/dev/null) && [ -n \"$PID\" ] && kill \"$PID\" 2>/dev/null && echo \"Killed old pane daemon (PID $PID)\"; BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); open -W \"$BUILT/Kytos.app\"'", depends-on = ["build-if-needed"] }
+# Build if needed, launch app.
+run = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); open -W \"$BUILT/Kytos.app\"'", depends-on = ["build-if-needed"] }
 
 # -- Release packaging tasks --
 
 # Build Release configuration via xcodebuild.
-build-release = { cmd = "xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release build -allowProvisioningUpdates", depends-on = ["generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
+build-release = { cmd = "xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release build -allowProvisioningUpdates", depends-on = ["build-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
 
 # Assemble the .app bundle from the Release build output.
-# xcodebuild already produces a full Kytos.app (with pane binary and widget appex bundled
+# xcodebuild already produces a full Kytos.app (with widget appex bundled
 # via build phases in project.yml), so we just locate and copy it to the project root.
 package = { cmd = "bash -c 'set -e; BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); if [ ! -d \"$BUILT/Kytos.app\" ]; then echo \"ERROR: Release build not found at $BUILT/Kytos.app\"; exit 1; fi; rm -rf Kytos.app; cp -R \"$BUILT/Kytos.app\" Kytos.app; echo \"Packaged: Kytos.app\"'", depends-on = ["build-release"] }
 

@@ -1,5 +1,6 @@
 # Xcode
 .DS_Store
+.claude
 build/
 *.pbxproj
 *.xcworkspace
@@ -28,3 +29,6 @@ mksh_bin
 *.a
 *.dylib
 *.app
+
+# Frameworks (built on demand via pixi run build-ghostty)
+Frameworks/GhosttyKit.xcframework/

@@ -1,6 +1,0 @@
-[submodule "Submodules/Pane"]
-	path = Submodules/Pane
-	url = https://github.com/jwintz/Pane.git
-[submodule "Submodules/SwiftTerm"]
-	path = Submodules/SwiftTerm
-	url = https://github.com/jwintz/SwiftTerm.git

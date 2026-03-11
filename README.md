@@ -1,116 +1,93 @@
 # Kytos
 
-A terminal emulator for macOS and iPadOS built on [KelyphosKit](../kelyphos) and [SwiftTerm](Submodules/SwiftTerm) leveraging [Pane](Submodules/Pane).
+A terminal emulator for macOS built on [libghostty](https://github.com/ghostty-org/ghostty) and [KelyphosKit](../kelyphos).
 
-## Building
+## Prerequisites
 
-The Xcode project is generated from `project.yml` using [XcodeGen](https://github.com/yonaskolb/XcodeGen), which is bundled as a Swift Package Manager dependency.
+- macOS 26+ (Tahoe)
+- [pixi](https://pixi.sh) package manager
+- Xcode with macOS 26 SDK
+- Ghostty source at `~/Syntropment/ghostty` (for building GhosttyKit)
 
-After adding or removing source files, regenerate the project with:
-
-```bash
-swift run --package-path .build/checkouts/XcodeGen xcodegen generate --spec project.yml
-```
-
-Then build:
+## Quick Start
 
 ```bash
-xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build
+pixi run build    # Build GhosttyKit + generate Xcode project + compile
+pixi run run      # Build if needed + launch the app
 ```
 
-Then run:
+## Build Tasks
 
-```bash
-$(xcodebuild -project /Users/jwintz/Syntropment/kytos/Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | awk '/BUILT_PRODUCTS_DIR/{print $3}' | head -1)/Kytos.app/Contents/MacOS/Kytos
-```
+All build operations use `pixi run <task>`. Run `pixi task list` to see all available tasks.
 
-## App Icon
+| Task | Description |
+|------|-------------|
+| `build-ghostty` | Build `GhosttyKit.xcframework` from Ghostty source (zig + arm64) |
+| `generate` | Regenerate the Xcode project from `project.yml` (XcodeGen) |
+| `generate-if-needed` | Regenerate only when `project.yml` is newer than the project |
+| `build` | Full build: ghostty + generate + xcodebuild (Debug) |
+| `build-if-needed` | Incremental build — skips if binary is up to date |
+| `run` | Build if needed + launch `Kytos.app` |
+| `test` | Run unit tests |
+| `distclean` | Remove all build artifacts for a pristine rebuild |
 
-Kytos uses Apple's `.icon` package format introduced in macOS 26 (Tahoe). There is no `.icns` fallback — macOS 26 is the minimum deployment target.
+### Release & Distribution
 
-- **Location**: `Kytos-Default.icon/` at the repository root.
-- **Format**: The directory contains an `icon.json` manifest that defines layers, shadow, and translucency for the Liquid Glass icon style.
-- **Build integration**: `actool` compiles the `.icon` package automatically during the Xcode build (driven by XcodeGen via `project.yml`). The app references it through `CFBundleIconName: Kytos-Default` in Info.plist.
-- **Updating the icon**: Replace `Assets/kytos.png` with a new source image and adjust `icon.json` layer definitions as needed.
+| Task | Description |
+|------|-------------|
+| `build-release` | Release configuration build |
+| `package` | Copy the Release `.app` bundle to the project root |
+| `sign` | Code sign the app (ad-hoc by default, set `SIGN_IDENTITY` for distribution) |
+| `dmg` | Create a DMG disk image |
+| `notarize` | Submit DMG for Apple notarization (requires `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`) |
+| `changelog` | Generate changelog from git log since last tag |
 
 ## Architecture
 
 | Component | Role |
-|---|---|
-| **KelyphosKit** | Shell UI — navigator, inspector, utility panels, tab management, keybindings |
-| **SwiftTerm** | Terminal emulation (VT100/xterm), PTY rendering |
-| **mksh** | Bundled shell binary; default shell on iPadOS, option on macOS |
-| **Pane** | Background PTY server (macOS); `KytosPaneClient` connects over Unix socket |
+|-----------|------|
+| **libghostty** | Terminal emulation, Metal rendering, PTY management, splits |
+| **KelyphosKit** | Shell UI — navigator, inspector, utility panels, keybindings |
+| **tmux** | User-facing multiplexer (available via pixi PATH, no app integration) |
 
-## Split-pane layout
+### Terminal Configuration
 
-`PaneLayoutTree` (`Models.swift`) is a binary tree where each leaf is a terminal session and each branch is a horizontal/vertical split. On macOS, each terminal leaf stores a `paneSessionID` referencing a live pane server session. On iPadOS, the PTY runs in-process with mksh.
+Terminal settings (font, colors, cursor, keybindings) are managed via Ghostty's config file:
 
-### One pane session per terminal pane
+```
+~/.config/ghostty/config
+```
 
-Each leaf in the split tree maps to exactly one pane server session. A pane session is a single PTY process (e.g. a `/bin/zsh` instance) managed by the background server. When you split a terminal, Kytos creates a new pane session for the new pane. This is the expected model — unlike tmux where a "session" groups multiple windows and panes, a pane session is a 1:1 mapping to a single terminal.
+The Settings window provides an "Open Ghostty Config" button for quick access. Kytos-specific UI preferences (e.g. horizontal margin) are separate and stored in UserDefaults.
 
-The navigator sidebar lists every leaf pane with its shell name (e.g. "zsh") and pane session ID. Multiple panes in the same tab are independent sessions running independent shell processes.
+### Source Files
 
-## Session lifecycle (macOS)
+```
+Sources/KytosApp/
+  KytosApp.swift                  # @main, window/tab management, commands
+  Models.swift                    # KytosSession, KytosWorkspace, KytosAppModel
+  KytosSettings.swift             # Kytos-specific UI preferences
+  KytosSettingsView.swift         # Settings window
+  KytosPanelViews.swift           # Inspector panels
+  Ghostty/
+    KytosGhosttyApp.swift         # ghostty_app_t wrapper, C callbacks
+    KytosGhosttyView.swift        # ghostty_surface_t NSView, keyboard/mouse/IME
+    KytosTerminalRepresentable.swift  # SwiftUI bridge (NSViewRepresentable)
+Sources/KytosWidget/              # macOS widget extension
+Sources/KytosTests/               # Unit tests
+```
 
-| Event | Action |
-|---|---|
-| App launch | `KytosAppModel.load()` decodes persisted trees, then `reconcileSessionsOnLaunch()` checks each `paneSessionID` against `pane list`. Dead IDs are cleared so the view creates a fresh session. |
-| Terminal appears | `PaneWorkspaceTerminalView` creates a pane session if `paneSessionID == nil`; stores the ID back. |
-| Pane closed | `pane destroy <id>` called; leaf removed from tree. |
-| Window/tab closed | Stream disconnects; session survives in server. |
-| App quit | Streams disconnected; server keeps running; sessions survive restart. |
-| Server crash | All IDs cleared on next launch; fresh sessions created. |
+### Key Patterns
 
-## Pane
+- **`KytosGhosttyApp`** — `@Observable @MainActor` singleton wrapping `ghostty_app_t`. Owns config, runtime C callbacks (wakeup, action, clipboard, close), and the app tick loop.
+- **`KytosGhosttyView`** — `NSView` subclass wrapping `ghostty_surface_t`. Handles Metal layer, keyboard/mouse forwarding, and IME via `NSTextInputClient`.
+- **`KytosTerminalRepresentable`** — Thin `NSViewRepresentable` bridging `KytosGhosttyView` into SwiftUI.
+- **`KytosWorkspace`** — `@Observable` model holding a single `KytosSession` per window/tab.
+- **`KytosAppModel`** — Manages window-to-workspace mapping, persistence, and tab group restoration using native macOS window tabs.
 
-A terminal multiplexer for macOS written in Swift. It is similar in spirit to tmux or screen, allowing you to run terminal sessions in the background and attach/detach from them at will.
+### Build Pipeline
 
-### Core Architecture
+1. **GhosttyKit** — Built from Ghostty source via `zig build` (arm64, ReleaseFast). Produces `Frameworks/GhosttyKit.xcframework` (static library, git-ignored).
+2. **XcodeGen** — `project.yml` defines targets, dependencies, and build settings. Generates `Kytos.xcodeproj` (git-ignored).
+3. **xcodebuild** — Compiles Swift 6 sources, links GhosttyKit + Carbon + KelyphosKit, produces `Kytos.app`.
 
-* **Client-Server Model**: Pane operates with a persistent background server (`PaneServer`) that manages multiple terminal sessions. Clients (`PaneClient`) interact with the server via Unix Domain Sockets located in `/tmp/pane-<uid>/`.
-* **Terminal Emulation**: The server uses the **SwiftTerm** library to emulate a full terminal for each session. It connects to local shell processes (like zsh)        using a PTY.
-* **Hybrid Communication Protocol**:
-  * **JSON**: Used for control commands (creating, listing, or destroying sessions).
-  * **Custom Binary Protocol**: A high-performance binary format (`PaneBinaryCodable`) is used for streaming terminal updates. It sends "deltas" (only the
-changed lines) to minimize latency and bandwidth.
-* **Rendering**: The client uses drivers adapted from **TermKit** (specifically `UnixDriver`) to render the remote terminal state onto the user's local console.
-
-### Key Features
-
-1. **Session Persistence**: Sessions continue running on the server even after you detach or close your terminal window.
-2. **Efficient Streaming**: Uses incremental updates (deltas) and a binary wire format to ensure the terminal feels responsive even over the socket connection.
-3. **Command Mode (`Ctrl-B`)**: Similar to `tmux`, Pane uses a prefix key (`Ctrl-B`) to trigger commands while attached:
-   * `d`: **Detach** from the session.
-   * `c`: **Create** a new session and immediately switch to it.
-   * `n`: Switch to the **next** session.
-   * `p`: Switch to the **previous** session.
-4. **Multi-Client Support**: Multiple clients can attach to the same session simultaneously, with the server broadcasting updates to all of them in real-time.
-5. **Auto-Lifecycle Management**: The client can automatically launch the server if it isn't already running when you try to create or attach to a session.
-6. **Advanced Terminal Support**: Supports 256-color and TrueColor (24-bit) output, bold, dim, blink, invert, and underline styles.
-
-### CLI Interface
-
-The `pane` executable provides several subcommands:
-* `pane create [name] [command]`: Starts a new session (optionally with a custom name and command).
-* `pane list`: Displays all active sessions, their PIDs, and their status.
-* `pane attach [sessionID]`: Connects your current terminal to a background session.
-* `pane destroy [sessionID]`: Forcefully terminates a session.
-* `pane status`: Reports the health and PID of the running server.
-* `pane server`: Manually starts the background server process.
-* `pane list-servers`: Lists all active Pane servers detected in the temporary runtime directory.
-
-### Technical Implementation Details
-
-* **Runtime Directory**: `/tmp/pane-<uid>/` contains the communication socket (`default`) and a PID file (`pane.pid`).
-* **Concurrency**: Uses Swift Concurrency and `DispatchQueue` extensively to handle asynchronous I/O and process management safely.
-* **Platform Support**: While defined for macOS 13+, the inclusion of `WindowsDriver.swift` and `CursesDriver.swift` points towards a highly modular design capable of cross-platform expansion.
-
-### ⚠️ Pane is an executable, not a library
-
-The `pane` package only exposes an executable target — its types are not `public` and cannot be imported. `KytosPaneClient.swift` implements the same Unix-socket / JSON-framing protocol directly, without importing the pane module. The pane binary is bundled in the macOS app via the **Bundle pane** post-build script in `project.yml` and started on-demand by `KytosPaneClient.startServer()`.
-
-### iPadOS
-
-No pane server. All terminal sessions use an in-process PTY with the bundled mksh binary. No session persistence between launches.
