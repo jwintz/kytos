@@ -59,6 +59,10 @@ final class KytosGhosttyApp {
             let scheme: ghostty_color_scheme_e = isDark
                 ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT
             ghostty_app_set_color_scheme(appHandle, scheme)
+            // Also refresh all surfaces so theme changes apply immediately
+            DispatchQueue.main.async {
+                KytosGhosttyApp.shared.refreshAllSurfaces(scheme: scheme)
+            }
         }
     }
 
@@ -76,7 +80,7 @@ final class KytosGhosttyApp {
 
     // MARK: - Surface lifecycle
 
-    func newSurface(in view: NSView, context: ghostty_surface_context_e = GHOSTTY_SURFACE_CONTEXT_WINDOW) -> ghostty_surface_t? {
+    func newSurface(in view: NSView, context: ghostty_surface_context_e = GHOSTTY_SURFACE_CONTEXT_WINDOW, workingDirectory: String? = nil) -> ghostty_surface_t? {
         guard let app else { return nil }
         var cfg = ghostty_surface_config_new()
         cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
@@ -85,7 +89,35 @@ final class KytosGhosttyApp {
         cfg.scale_factor = Double(view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0)
         cfg.font_size = 0 // Use config default
         cfg.context = context
+
+        // Set working directory for PWD restoration
+        var wdPtr: UnsafeMutablePointer<CChar>?
+        if let wd = workingDirectory, !wd.isEmpty {
+            wdPtr = strdup(wd)
+            cfg.working_directory = UnsafePointer(wdPtr!)
+        }
+
+        // Set shell environment variables
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let features = "ghostty,splits"
+        let envKey1 = strdup("KYTOS_SHELL_VERSION")!
+        let envVal1 = strdup(version)!
+        let envKey2 = strdup("KYTOS_SHELL_FEATURES")!
+        let envVal2 = strdup(features)!
+        var envVars: [ghostty_env_var_s] = [
+            ghostty_env_var_s(key: envKey1, value: envVal1),
+            ghostty_env_var_s(key: envKey2, value: envVal2),
+        ]
+        cfg.env_vars = UnsafeMutablePointer(mutating: &envVars)
+        cfg.env_var_count = envVars.count
+
         let surface = ghostty_surface_new(app, &cfg)
+
+        // Free strdup'd strings after libghostty has copied them
+        free(envKey1); free(envVal1)
+        free(envKey2); free(envVal2)
+        if let wdPtr { free(wdPtr) }
+
         if surface == nil {
             kLog("[Ghostty] ghostty_surface_new failed")
         }
@@ -108,6 +140,18 @@ final class KytosGhosttyApp {
     func setColorScheme(_ scheme: ghostty_color_scheme_e) {
         guard let app else { return }
         ghostty_app_set_color_scheme(app, scheme)
+        refreshAllSurfaces(scheme: scheme)
+    }
+
+    /// Refresh all live surfaces after a color scheme or config change.
+    func refreshAllSurfaces(scheme: ghostty_color_scheme_e? = nil) {
+        for (_, view) in KytosGhosttyView.viewRegistry {
+            guard let surface = view.surface else { continue }
+            if let scheme {
+                ghostty_surface_set_color_scheme(surface, scheme)
+            }
+            ghostty_surface_refresh(surface)
+        }
     }
 
     // MARK: - Callbacks (static, C-compatible)
@@ -123,14 +167,23 @@ final class KytosGhosttyApp {
         target: ghostty_target_s,
         action: ghostty_action_s
     ) -> Bool {
+        // Extract the source view if target is a specific surface
+        var sourceView: KytosGhosttyView?
+        if target.tag == GHOSTTY_TARGET_SURFACE {
+            let surface = target.target.surface
+            if let ud = ghostty_surface_userdata(surface) {
+                sourceView = Unmanaged<KytosGhosttyView>.fromOpaque(ud).takeUnretainedValue()
+            }
+        }
+
         DispatchQueue.main.async {
-            KytosGhosttyApp.shared.handleAction(action)
+            KytosGhosttyApp.shared.handleAction(action, sourceView: sourceView)
         }
         return true
     }
 
     @MainActor
-    private func handleAction(_ action: ghostty_action_s) {
+    private func handleAction(_ action: ghostty_action_s, sourceView: KytosGhosttyView?) {
         switch action.tag {
         case GHOSTTY_ACTION_NEW_TAB:
             NotificationCenter.default.post(
@@ -142,13 +195,43 @@ final class KytosGhosttyApp {
                 name: NSNotification.Name("KytosGhosttyNewWindow"),
                 object: nil
             )
+        case GHOSTTY_ACTION_NEW_SPLIT:
+            let splitDir = action.action.new_split
+            let direction: KytosSplitDirection = (splitDir == GHOSTTY_SPLIT_DIRECTION_DOWN || splitDir == GHOSTTY_SPLIT_DIRECTION_UP)
+                ? .vertical : .horizontal
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosGhosttyNewSplit"),
+                object: sourceView,
+                userInfo: ["direction": direction]
+            )
+        case GHOSTTY_ACTION_GOTO_SPLIT:
+            let gotoDir = action.action.goto_split
+            kLog("[Ghostty] GOTO_SPLIT action: rawValue=\(gotoDir.rawValue)")
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosGhosttyGotoSplit"),
+                object: sourceView,
+                userInfo: ["direction": gotoDir.rawValue]
+            )
+        case GHOSTTY_ACTION_RESIZE_SPLIT:
+            let resize = action.action.resize_split
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosGhosttyResizeSplit"),
+                object: sourceView,
+                userInfo: ["amount": resize.amount, "direction": resize.direction]
+            )
+        case GHOSTTY_ACTION_EQUALIZE_SPLITS:
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosGhosttyEqualizeSplits"),
+                object: nil
+            )
         case GHOSTTY_ACTION_SET_TITLE:
             let title = action.action.set_title
             if let ptr = title.title {
                 let str = String(cString: ptr)
                 NotificationCenter.default.post(
                     name: NSNotification.Name("KytosGhosttySetTitle"),
-                    object: str
+                    object: sourceView,
+                    userInfo: ["title": str]
                 )
             }
         case GHOSTTY_ACTION_COLOR_CHANGE:
@@ -160,6 +243,66 @@ final class KytosGhosttyApp {
             )
         case GHOSTTY_ACTION_RELOAD_CONFIG:
             reloadConfig()
+        case GHOSTTY_ACTION_PWD:
+            let pwdAction = action.action.pwd
+            if let ptr = pwdAction.pwd {
+                let pwd = String(cString: ptr)
+                sourceView?.pwd = pwd
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("KytosGhosttyPwd"),
+                    object: sourceView,
+                    userInfo: ["pwd": pwd]
+                )
+            }
+        case GHOSTTY_ACTION_SCROLLBAR:
+            let sb = action.action.scrollbar
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosGhosttyScrollbar"),
+                object: sourceView,
+                userInfo: ["total": sb.total, "offset": sb.offset, "len": sb.len]
+            )
+        case GHOSTTY_ACTION_CELL_SIZE:
+            let cs = action.action.cell_size
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosGhottyCellSize"),
+                object: sourceView,
+                userInfo: ["width": cs.width, "height": cs.height]
+            )
+        case GHOSTTY_ACTION_PROGRESS_REPORT:
+            let pr = action.action.progress_report
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosGhosttyProgressReport"),
+                object: sourceView,
+                userInfo: ["state": pr.state.rawValue, "progress": pr.progress]
+            )
+        case GHOSTTY_ACTION_START_SEARCH:
+            let search = action.action.start_search
+            var info: [String: Any] = [:]
+            if let ptr = search.needle { info["needle"] = String(cString: ptr) }
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosGhosttyStartSearch"),
+                object: sourceView,
+                userInfo: info
+            )
+        case GHOSTTY_ACTION_END_SEARCH:
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosGhosttyEndSearch"),
+                object: sourceView
+            )
+        case GHOSTTY_ACTION_SEARCH_TOTAL:
+            let total = action.action.search_total.total
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosGhosttySearchTotal"),
+                object: sourceView,
+                userInfo: ["total": total]
+            )
+        case GHOSTTY_ACTION_SEARCH_SELECTED:
+            let selected = action.action.search_selected.selected
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosGhosttySearchSelected"),
+                object: sourceView,
+                userInfo: ["selected": selected]
+            )
         default:
             kLog("[Ghostty] Unhandled action: \(action.tag.rawValue)")
         }

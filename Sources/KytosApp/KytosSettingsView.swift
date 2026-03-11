@@ -47,6 +47,12 @@ private struct KytosTerminalSettingsTab: View {
                     Text("\(Int(settings.horizontalMargin)) px")
                         .frame(width: 40, alignment: .trailing)
                 }
+                HStack {
+                    Text("Inspector Refresh")
+                    Slider(value: $settings.inspectorRefreshInterval, in: 0.5...10, step: 0.5)
+                    Text(String(format: "%.1fs", settings.inspectorRefreshInterval))
+                        .frame(width: 40, alignment: .trailing)
+                }
             }
         }
         .formStyle(.grouped)

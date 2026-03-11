@@ -16,6 +16,30 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     /// Published working directory — updated via PWD action.
     var pwd: String = ""
 
+    /// The pane UUID this view belongs to. Set by KytosTerminalRepresentable.
+    var paneID: UUID?
+    /// Initial working directory for PWD restoration on launch.
+    var initialPwd: String?
+    
+    // Native scrollbar via NSScrollView overlay
+    private var scrollView: KytosPassthroughScrollView?
+    private var scrollDocumentView: NSView?
+    private var isLiveScrolling = false
+    private var lastSentRow: Int?
+    private var scrollbarState: (total: UInt64, offset: UInt64, len: UInt64)?
+    private var cellHeight: CGFloat = 0
+    private var scrollObservers: [NSObjectProtocol] = []
+
+    // MARK: - View Registry
+
+    /// Static registry mapping pane UUIDs to their live views.
+    /// Used for keyboard focus management, view reuse, and appearance refresh.
+    static var viewRegistry: [UUID: KytosGhosttyView] = [:]
+
+    static func view(for paneID: UUID) -> KytosGhosttyView? {
+        viewRegistry[paneID]
+    }
+
     // MARK: - Init
 
     override init(frame: NSRect) {
@@ -23,19 +47,141 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
         wantsLayer = true
         layer?.isOpaque = false
         layerContentsRedrawPolicy = .onSetNeedsDisplay
+        setupScroller()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
 
     deinit {
+        let savedPaneID = self.paneID
         if let surface { ghostty_surface_free(surface) }
+        NotificationCenter.default.removeObserver(self)
+        Task { @MainActor in
+            if let savedPaneID { KytosGhosttyView.viewRegistry.removeValue(forKey: savedPaneID) }
+        }
+    }
+    
+    override func removeFromSuperview() {
+        for obs in scrollObservers { NotificationCenter.default.removeObserver(obs) }
+        scrollObservers.removeAll()
+        super.removeFromSuperview()
+    }
+
+    // MARK: - Scroller (NSScrollView overlay, like ghostty's SurfaceScrollView)
+    
+    private func setupScroller() {
+        let sv = KytosPassthroughScrollView()
+        sv.hasVerticalScroller = true
+        sv.hasHorizontalScroller = false
+        sv.autohidesScrollers = false
+        sv.scrollerStyle = .overlay
+        sv.drawsBackground = false
+        sv.contentView.clipsToBounds = false
+        
+        let doc = NSView(frame: NSRect(origin: .zero, size: bounds.size))
+        sv.documentView = doc
+        self.scrollDocumentView = doc
+        
+        sv.frame = bounds
+        sv.autoresizingMask = [.width, .height]
+        addSubview(sv)
+        self.scrollView = sv
+        
+        NotificationCenter.default.addObserver(self, selector: #selector(handleScrollbarAction(_:)),
+                                               name: NSNotification.Name("KytosGhosttyScrollbar"), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(handleCellSizeAction(_:)),
+                                               name: NSNotification.Name("KytosGhottyCellSize"), object: nil)
+        
+        // Force overlay style back on system preference change
+        scrollObservers.append(NotificationCenter.default.addObserver(
+            forName: NSScroller.preferredScrollerStyleDidChangeNotification,
+            object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.scrollView?.scrollerStyle = .overlay
+        })
+        
+        // Listen for live scroll (user dragging scrollbar)
+        sv.contentView.postsBoundsChangedNotifications = true
+        scrollObservers.append(NotificationCenter.default.addObserver(
+            forName: NSScrollView.willStartLiveScrollNotification, object: sv, queue: .main
+        ) { [weak self] _ in self?.isLiveScrolling = true })
+        
+        scrollObservers.append(NotificationCenter.default.addObserver(
+            forName: NSScrollView.didEndLiveScrollNotification, object: sv, queue: .main
+        ) { [weak self] _ in self?.isLiveScrolling = false })
+        
+        scrollObservers.append(NotificationCenter.default.addObserver(
+            forName: NSScrollView.didLiveScrollNotification, object: sv, queue: .main
+        ) { [weak self] _ in self?.handleLiveScroll() })
+    }
+    
+    /// Calculate document height from scrollbar state
+    private func scrollDocumentHeight() -> CGFloat {
+        let contentHeight = scrollView?.contentSize.height ?? bounds.height
+        guard cellHeight > 0, let sb = scrollbarState else { return contentHeight }
+        let docGridHeight = CGFloat(sb.total) * cellHeight
+        let padding = contentHeight - (CGFloat(sb.len) * cellHeight)
+        return docGridHeight + padding
+    }
+    
+    /// Synchronize the scroll view's document size and position with ghostty's scrollbar state
+    private func synchronizeScrollView() {
+        guard let sv = scrollView, let doc = scrollDocumentView else { return }
+        doc.frame.size.height = scrollDocumentHeight()
+        doc.frame.size.width = sv.bounds.width
+        
+        if !isLiveScrolling, cellHeight > 0, let sb = scrollbarState {
+            // Invert: terminal offset is from top, AppKit position from bottom
+            let offsetY = CGFloat(sb.total - sb.offset - sb.len) * cellHeight
+            sv.contentView.scroll(to: CGPoint(x: 0, y: offsetY))
+            lastSentRow = Int(sb.offset)
+        }
+        
+        sv.reflectScrolledClipView(sv.contentView)
+    }
+    
+    /// Handle user dragging the scrollbar — convert pixel position to row number
+    private func handleLiveScroll() {
+        guard cellHeight > 0, let sv = scrollView, let doc = scrollDocumentView else { return }
+        let visibleRect = sv.contentView.documentVisibleRect
+        let documentHeight = doc.frame.height
+        let scrollOffset = documentHeight - visibleRect.origin.y - visibleRect.height
+        let row = Int(scrollOffset / cellHeight)
+        
+        guard row != lastSentRow else { return }
+        lastSentRow = row
+        
+        guard let surface else { return }
+        let cmd = "scroll_to_row:\(row)"
+        cmd.withCString { ptr in
+            _ = ghostty_surface_binding_action(surface, ptr, UInt(cmd.utf8.count))
+        }
+    }
+    
+    @objc private func handleCellSizeAction(_ notif: Notification) {
+        guard let view = notif.object as? KytosGhosttyView, view === self else { return }
+        if let width = notif.userInfo?["width"] as? UInt32,
+           let height = notif.userInfo?["height"] as? UInt32 {
+            let scale = window?.backingScaleFactor ?? 2.0
+            cellHeight = CGFloat(height) / scale
+        }
+    }
+    
+    @objc private func handleScrollbarAction(_ notif: Notification) {
+        guard let view = notif.object as? KytosGhosttyView, view === self else { return }
+        guard let total = notif.userInfo?["total"] as? UInt64,
+              let offset = notif.userInfo?["offset"] as? UInt64,
+              let len = notif.userInfo?["len"] as? UInt64 else { return }
+        
+        scrollbarState = (total: total, offset: offset, len: len)
+        synchronizeScrollView()
     }
 
     // MARK: - Surface lifecycle
 
     func createSurface(context: ghostty_surface_context_e = GHOSTTY_SURFACE_CONTEXT_WINDOW) {
         guard surface == nil else { return }
-        surface = KytosGhosttyApp.shared.newSurface(in: self, context: context)
+        surface = KytosGhosttyApp.shared.newSurface(in: self, context: context, workingDirectory: initialPwd)
         if let surface {
             let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
             ghostty_surface_set_content_scale(surface, scale, scale)
@@ -59,6 +205,11 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
         contentSize = newSize
         let fb = convertToBacking(NSRect(origin: .zero, size: newSize)).size
         ghostty_surface_set_size(surface, UInt32(fb.width), UInt32(fb.height))
+    }
+    
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        // NSScrollView handles its own resizing via autoresizingMask
     }
 
     override func viewDidChangeBackingProperties() {
@@ -92,6 +243,12 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
         if window != nil && surface == nil {
             createSurface()
         }
+        // Register/unregister from view registry
+        if window != nil, let paneID {
+            KytosGhosttyView.viewRegistry[paneID] = self
+        } else if let paneID, window == nil {
+            KytosGhosttyView.viewRegistry.removeValue(forKey: paneID)
+        }
         if let surface {
             ghostty_surface_set_focus(surface, window?.isKeyWindow ?? false)
             if let displayID = window?.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 {
@@ -113,6 +270,13 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     override func becomeFirstResponder() -> Bool {
         guard let surface else { return false }
         ghostty_surface_set_focus(surface, true)
+        if let paneID {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosGhosttyFocusChanged"),
+                object: self,
+                userInfo: ["paneID": paneID]
+            )
+        }
         return true
     }
 
@@ -205,10 +369,32 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.type == .keyDown else { return false }
+
+        // Let Kytos-owned shortcuts propagate to menu bar / SwiftUI responder chain
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == .command {
+            switch event.keyCode {
+            case 12: return false  // Cmd+Q → app quit
+            case 29: return false  // Cmd+0 → reset zoom
+            case 18: return false  // Cmd+1 → first tab
+            case 43: return false  // Cmd+, → settings
+            default: break
+            }
+        }
+
         guard let surface else { return false }
-        let keyEvent = Self.ghosttyKeyEvent(from: event, action: GHOSTTY_ACTION_PRESS)
-        if ghostty_surface_key_is_binding(surface, keyEvent, nil) {
-            _ = ghostty_surface_key(surface, keyEvent)
+
+        // Must pass text to ghostty for binding matching (same as reference impl)
+        var keyEvent = Self.ghosttyKeyEvent(from: event, action: GHOSTTY_ACTION_PRESS)
+        let chars = event.characters ?? ""
+        let isBinding = chars.withCString { ptr -> Bool in
+            keyEvent.text = ptr
+            return ghostty_surface_key_is_binding(surface, keyEvent, nil)
+        }
+
+        if isBinding {
+            self.keyDown(with: event)
             return true
         }
         return false
@@ -290,6 +476,7 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     // MARK: - Mouse
 
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         guard let surface else { return }
         let mods = Self.ghosttyMods(event.modifierFlags)
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, mods)
@@ -437,5 +624,29 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
             }
         }
         return keyEvent
+    }
+}
+
+// MARK: - Passthrough NSScrollView
+
+/// An NSScrollView that only handles scrollbar interactions.
+/// All other events (scroll wheel, mouse, keyboard) pass through to the
+/// KytosGhosttyView underneath, so ghostty handles scrolling internally.
+private class KytosPassthroughScrollView: NSScrollView {
+    override func scrollWheel(with event: NSEvent) {
+        // Forward scroll wheel events to superview (KytosGhosttyView)
+        superview?.scrollWheel(with: event)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // Only intercept hits on the scroller knob/track area
+        if let scroller = verticalScroller {
+            let scrollerPoint = convert(point, to: scroller)
+            if scroller.bounds.contains(scrollerPoint) && scroller.testPart(scrollerPoint) != .noPart {
+                return super.hitTest(point)
+            }
+        }
+        // Pass everything else through to superview
+        return nil
     }
 }

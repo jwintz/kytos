@@ -45,6 +45,12 @@ targets:
         CFBundleName: Kytos
         CFBundleDisplayName: Kytos
         CFBundleIconFile: kytos
+        UTExportedTypeDeclarations:
+          - UTTypeConformsTo:
+              - public.data
+            UTTypeDescription: Kytos Pane ID
+            UTTypeIdentifier: me.jwintz.kytos.pane-id
+            UTTypeTagSpecification: {}
     settings:
       PRODUCT_NAME: Kytos
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos

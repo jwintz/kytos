@@ -14,13 +14,31 @@ public struct KytosSession: Identifiable, Codable, Hashable {
     }
 }
 
-/// One macOS window/tab. Each workspace holds a single session.
+/// One macOS window/tab. Each workspace holds a split tree of panes.
 @Observable
 public final class KytosWorkspace: Codable {
-    public var session: KytosSession
+    public var splitTree: KytosSplitTree
+    public var focusedPaneID: UUID?
 
-    public init(session: KytosSession) {
-        self.session = session
+    /// Backward-compatible computed property — returns the first leaf pane as a session.
+    public var session: KytosSession {
+        get {
+            let pane = splitTree.firstLeaf
+            return KytosSession(id: pane.id, name: pane.title)
+        }
+        set {
+            splitTree.updateTitle(newValue.name, for: splitTree.firstLeaf.id)
+        }
+    }
+
+    public init(splitTree: KytosSplitTree) {
+        self.splitTree = splitTree
+        self.focusedPaneID = splitTree.firstLeaf.id
+    }
+
+    public convenience init(session: KytosSession) {
+        let pane = KytosPane(id: session.id, title: session.name)
+        self.init(splitTree: KytosSplitTree(pane: pane))
     }
 
     public static func defaultWorkspace() -> KytosWorkspace {
@@ -28,18 +46,36 @@ public final class KytosWorkspace: Codable {
     }
 
     // MARK: - Codable
+
     enum CodingKeys: String, CodingKey {
+        case splitTree, focusedPaneID
+        // Legacy key for v6 migration
         case session
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.session = try container.decode(KytosSession.self, forKey: .session)
+        if let tree = try? container.decode(KytosSplitTree.self, forKey: .splitTree) {
+            // v7 format
+            self.splitTree = tree
+            self.focusedPaneID = try container.decodeIfPresent(UUID.self, forKey: .focusedPaneID)
+        } else if let session = try? container.decode(KytosSession.self, forKey: .session) {
+            // v6 migration: single session → leaf node
+            let pane = KytosPane(id: session.id, title: session.name)
+            self.splitTree = KytosSplitTree(pane: pane)
+            self.focusedPaneID = pane.id
+        } else {
+            // Fallback
+            let pane = KytosPane()
+            self.splitTree = KytosSplitTree(pane: pane)
+            self.focusedPaneID = pane.id
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(session, forKey: .session)
+        try container.encode(splitTree, forKey: .splitTree)
+        try container.encode(focusedPaneID, forKey: .focusedPaneID)
     }
 }
 
@@ -120,7 +156,8 @@ public final class KytosAppModel {
     public func save() {
         do {
             let data = try JSONEncoder().encode(windows)
-            UserDefaults.standard.set(data, forKey: "KytosAppModel_Windows_v6")
+            // Save as v7 (split tree format), keep v6 key for backward migration reads
+            UserDefaults.standard.set(data, forKey: "KytosAppModel_Windows_v7")
             kLog("[KytosDebug][AppModel] save() — \(windows.count) window(s)")
         } catch {
             kLog("[KytosDebug][AppModel] save() FAILED: \(error)")
@@ -131,8 +168,10 @@ public final class KytosAppModel {
 
     private func writeWidgetSnapshot() {
         let windowList = windows.values.map { workspace -> KytosWidgetWindow in
-            let terminal = KytosWidgetTerminal(id: workspace.session.id, process: "shell")
-            return KytosWidgetWindow(id: workspace.session.id, name: workspace.session.name, terminals: [terminal])
+            let terminals = workspace.splitTree.allPanes.map { pane in
+                KytosWidgetTerminal(id: pane.id, process: "shell")
+            }
+            return KytosWidgetWindow(id: workspace.session.id, name: workspace.session.name, terminals: terminals)
         }
         let snapshot = KytosWidgetSnapshot(date: .now, windows: windowList)
         KytosWidgetSnapshot.write(snapshot)
@@ -180,14 +219,21 @@ public final class KytosAppModel {
     }
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: "KytosAppModel_Windows_v6") else {
+        // Try v7 first, then fall back to v6
+        let key: String
+        if UserDefaults.standard.data(forKey: "KytosAppModel_Windows_v7") != nil {
+            key = "KytosAppModel_Windows_v7"
+        } else {
+            key = "KytosAppModel_Windows_v6"
+        }
+        guard let data = UserDefaults.standard.data(forKey: key) else {
             kLog("[KytosDebug][AppModel] load() — no saved data")
             return
         }
         do {
             let decoded = try JSONDecoder().decode([UUID: KytosWorkspace].self, from: data)
             self.windows = decoded
-            kLog("[KytosDebug][AppModel] load() — \(decoded.count) workspace(s)")
+            kLog("[KytosDebug][AppModel] load() — \(decoded.count) workspace(s) from \(key)")
         } catch {
             kLog("[KytosDebug][AppModel] load() DECODE FAILED: \(error)")
         }
