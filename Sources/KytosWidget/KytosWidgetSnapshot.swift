@@ -16,14 +16,45 @@ public struct KytosWidgetWindow: Codable, Identifiable {
     public var topProcess: String? { terminals.first?.process }
 }
 
+/// A flattened process tree node for widget display.
+public struct KytosWidgetProcessNode: Codable, Identifiable {
+    public let id: UUID
+    public let pid: Int32
+    public let command: String
+    public let depth: Int
+    public let rssMB: Double
+    public let cpu: String
+    public let isDeepest: Bool
+
+    public init(pid: Int32, command: String, depth: Int, rssMB: Double, cpu: String, isDeepest: Bool) {
+        self.id = UUID()
+        self.pid = pid
+        self.command = command
+        self.depth = depth
+        self.rssMB = rssMB
+        self.cpu = cpu
+        self.isDeepest = isDeepest
+    }
+}
+
 public struct KytosWidgetSnapshot: Codable {
     public let date: Date
     public let windows: [KytosWidgetWindow]
+    /// Flattened process tree for large widget display.
+    public let processTree: [KytosWidgetProcessNode]
     public var totalTerminals: Int { windows.reduce(0) { $0 + $1.terminalCount } }
 
-    public init(date: Date, windows: [KytosWidgetWindow]) {
+    public init(date: Date, windows: [KytosWidgetWindow], processTree: [KytosWidgetProcessNode] = []) {
         self.date = date
         self.windows = windows
+        self.processTree = processTree
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        date = try c.decode(Date.self, forKey: .date)
+        windows = try c.decode([KytosWidgetWindow].self, forKey: .windows)
+        processTree = try c.decodeIfPresent([KytosWidgetProcessNode].self, forKey: .processTree) ?? []
     }
 
     private static let widgetBundleID = "me.jwintz.Kytos.KytosWidget"
@@ -72,6 +103,12 @@ public struct KytosWidgetSnapshot: Codable {
                 KytosWidgetWindow(id: UUID(), name: "server", terminals: [
                     KytosWidgetTerminal(id: UUID(), process: "python"),
                 ]),
+            ],
+            processTree: [
+                KytosWidgetProcessNode(pid: 1000, command: "Kytos", depth: 0, rssMB: 42, cpu: "0.1%", isDeepest: false),
+                KytosWidgetProcessNode(pid: 1001, command: "login", depth: 1, rssMB: 1, cpu: "0.0%", isDeepest: false),
+                KytosWidgetProcessNode(pid: 1002, command: "zsh", depth: 2, rssMB: 8, cpu: "0.0%", isDeepest: false),
+                KytosWidgetProcessNode(pid: 1003, command: "vim", depth: 3, rssMB: 12, cpu: "0.2%", isDeepest: true),
             ]
         )
     }

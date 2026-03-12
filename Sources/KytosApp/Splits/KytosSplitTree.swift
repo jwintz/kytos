@@ -330,6 +330,36 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
         Self.pathToPane(paneID, in: root, path: [])?.joined(separator: " > ")
     }
 
+    /// A single step in the split tree path, with an associated SF Symbol.
+    public struct PositionStep: Sendable {
+        public let label: String
+        public let sfSymbol: String
+    }
+
+    /// Returns the position steps for a pane, each with an SF Symbol for visual representation.
+    public func positionSteps(for paneID: UUID) -> [PositionStep]? {
+        Self.stepsToPane(paneID, in: root, steps: [])
+    }
+
+    private static func stepsToPane(_ id: UUID, in node: KytosSplitNode, steps: [PositionStep]) -> [PositionStep]? {
+        switch node {
+        case .leaf(let pane):
+            return pane.id == id ? steps : nil
+        case .split(let s):
+            let leftStep: PositionStep
+            let rightStep: PositionStep
+            if s.direction == .horizontal {
+                leftStep = PositionStep(label: "Left", sfSymbol: "rectangle.lefthalf.filled")
+                rightStep = PositionStep(label: "Right", sfSymbol: "rectangle.righthalf.filled")
+            } else {
+                leftStep = PositionStep(label: "Top", sfSymbol: "rectangle.tophalf.filled")
+                rightStep = PositionStep(label: "Bottom", sfSymbol: "rectangle.bottomhalf.filled")
+            }
+            return stepsToPane(id, in: s.left, steps: steps + [leftStep])
+                ?? stepsToPane(id, in: s.right, steps: steps + [rightStep])
+        }
+    }
+
     private static func pathToPane(_ id: UUID, in node: KytosSplitNode, path: [String]) -> [String]? {
         switch node {
         case .leaf(let pane):

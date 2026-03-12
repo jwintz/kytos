@@ -42,13 +42,6 @@ private struct KytosPaneRowView: View {
                     .font(.system(size: 11, weight: isFocused ? .medium : .regular))
                     .lineLimit(1)
 
-                if let posPath = workspace.splitTree.positionPath(for: pane.id), workspace.splitTree.isSplit {
-                    Text(posPath)
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-
                 if !pane.pwd.isEmpty {
                     Text(abbreviatePath(pane.pwd))
                         .font(.system(size: 9))
@@ -58,6 +51,17 @@ private struct KytosPaneRowView: View {
             }
 
             Spacer()
+
+            // Position indicator (SF Symbol composition) — trailing side
+            if let posSteps = workspace.splitTree.positionSteps(for: pane.id), workspace.splitTree.isSplit {
+                HStack(spacing: 1) {
+                    ForEach(Array(posSteps.enumerated()), id: \.offset) { _, step in
+                        Image(systemName: step.sfSymbol)
+                            .font(.system(size: 8))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
 
             // Close button (visible on hover, only if multiple panes)
             if isHovering && workspace.splitTree.isSplit {
@@ -77,7 +81,7 @@ private struct KytosPaneRowView: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .glassEffect(in: RoundedRectangle(cornerRadius: 8))
+        .glassEffect(in: RoundedRectangle(cornerRadius: 12))
         .onTapGesture {
             workspace.focusedPaneID = pane.id
         }
@@ -452,7 +456,7 @@ struct KytosProcessInfoView: View {
         shellPid = result.2
     }
 
-    nonisolated private static func processTree(rootPID: pid_t) -> [ProcessEntry] {
+    nonisolated static func processTree(rootPID: pid_t) -> [ProcessEntry] {
         let task = Process()
         let pipe = Pipe()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
@@ -482,6 +486,8 @@ struct KytosProcessInfoView: View {
         var result: [ProcessEntry] = []
         func walk(_ pid: pid_t, depth: Int) {
             guard var entry = all[pid] else { return }
+            // Skip zombie processes — they're already dead and awaiting reaping
+            guard !entry.stat.hasPrefix("Z") else { return }
             entry.depth = depth
             result.append(entry)
             for child in (children[pid] ?? []).sorted() {

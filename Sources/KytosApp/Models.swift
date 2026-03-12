@@ -173,7 +173,22 @@ public final class KytosAppModel {
             }
             return KytosWidgetWindow(id: workspace.session.id, name: workspace.session.name, terminals: terminals)
         }
-        let snapshot = KytosWidgetSnapshot(date: .now, windows: windowList)
+
+        // Build process tree for large widget
+        let ourPid = ProcessInfo.processInfo.processIdentifier
+        let rawTree = KytosProcessInfoView.processTree(rootPID: ourPid)
+        let processTree = rawTree.enumerated().map { idx, entry in
+            KytosWidgetProcessNode(
+                pid: entry.pid,
+                command: (entry.command as NSString).lastPathComponent,
+                depth: entry.depth,
+                rssMB: entry.rssMB,
+                cpu: entry.cpu,
+                isDeepest: idx == rawTree.count - 1
+            )
+        }
+
+        let snapshot = KytosWidgetSnapshot(date: .now, windows: windowList, processTree: processTree)
         KytosWidgetSnapshot.write(snapshot)
         WidgetCenter.shared.reloadAllTimelines()
     }

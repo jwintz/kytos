@@ -488,11 +488,22 @@ struct KytosWindowView: View {
             if let ws = workspace {
                 updateToolbar(workspace: ws)
             }
+            // Remove unused kelyphos defaults (Kytos has 1 navigator tab, 1 inspector tab, 0 utility tabs)
+            for n in 2...9 {
+                registry.remove(category: "Navigator", label: "Navigator Tab \(n)")
+                registry.remove(category: "Inspector", label: "Inspector Tab \(n)")
+            }
+            registry.removeCategory("Utility")
+
+            // Register Kytos workspace shortcuts
             registry.register(category: "Workspace", label: "Close Pane", shortcut: "⌘W")
             registry.register(category: "Workspace", label: "New Window", shortcut: "⌘N")
             registry.register(category: "Workspace", label: "New Tab", shortcut: "⌘T")
             registry.register(category: "Workspace", label: "Split Horizontal", shortcut: "⌘D")
             registry.register(category: "Workspace", label: "Split Vertical", shortcut: "⇧⌘D")
+            registry.register(category: "Terminal", label: "Find", shortcut: "⌘F")
+            registry.register(category: "Terminal", label: "Find Next", shortcut: "⌘G")
+            registry.register(category: "Terminal", label: "Find Previous", shortcut: "⇧⌘G")
         }
     }
 

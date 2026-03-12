@@ -143,32 +143,65 @@ private struct MediumWidgetView: View {
     }
 }
 
-// MARK: - Large (all windows with process list + timestamp)
+// MARK: - Large (process tree, mirroring inspector design)
 
 private struct LargeWidgetView: View {
     let entry: KytosWidgetEntry
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Image(systemName: "terminal")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Kytos")
-                        .font(.headline)
-                    Text("\(entry.snapshot.windows.count) windows · \(entry.snapshot.totalTerminals) terminals")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            // Header
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color.primary.opacity(0.6))
+                    .frame(width: 7, height: 7)
+                Text("Kytos")
+                    .font(.system(size: 11, weight: .medium))
                 Spacer()
+                Text("\(entry.snapshot.windows.count)W · \(entry.snapshot.totalTerminals)T")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
             }
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(entry.snapshot.windows) { window in
-                    WindowRowView(window: window, showProcessList: true)
+            // Process tree
+            if entry.snapshot.processTree.isEmpty {
+                // Fallback to window list if no process tree data
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(entry.snapshot.windows) { window in
+                        WindowRowView(window: window, showProcessList: true)
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(entry.snapshot.processTree) { node in
+                        HStack(spacing: 4) {
+                            if node.depth > 0 {
+                                Color.clear.frame(width: CGFloat(node.depth) * 12)
+                                Image(systemName: "arrow.turn.down.right")
+                                    .font(.system(size: 7))
+                                    .foregroundStyle(.quaternary)
+                            }
+                            Circle()
+                                .fill(node.isDeepest ? Color.accentColor : Color.secondary.opacity(0.6))
+                                .frame(width: 5, height: 5)
+                            Text(node.command)
+                                .font(.system(size: 10, design: .monospaced))
+                                .lineLimit(1)
+                            Text(String(node.pid))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                            Spacer()
+                            Text(String(format: "%.0f MB", node.rssMB))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Text(node.cpu)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 2)
+                    }
                 }
             }
 
