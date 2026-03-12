@@ -503,7 +503,6 @@ struct KytosWindowView: View {
                 inspectorTabs: KytosInspectorTab.allCases,
                 utilityTabs: KytosUtilityTab.allCases,
                 scrollable: false,
-                principalToolbar: { AnyView(KytosSwiftShipToolbar()) },
                 detail: {
                     PaneWorkspaceView()
                 }
