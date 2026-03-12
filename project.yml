@@ -29,6 +29,14 @@ targets:
       - target: Kytos-Widget-macOS
         embed: true
         codeSign: true
+    preBuildScripts:
+      - name: Copy Ghostty Resources
+        basedOnDependencyAnalysis: false
+        script: |
+          RESOURCES_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          mkdir -p "$RESOURCES_DIR/ghostty"
+          cp -R "${SRCROOT}/Resources/ghostty/shell-integration" "$RESOURCES_DIR/ghostty/"
+          cp -R "${SRCROOT}/Resources/terminfo" "$RESOURCES_DIR/"
     postBuildScripts:
       - name: Register widget
         basedOnDependencyAnalysis: false

@@ -12,7 +12,7 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     private var contentSize: CGSize = .zero
 
     /// Published surface title — updated via SET_TITLE action.
-    var title: String = "Terminal"
+    var title: String = ""
     /// Published working directory — updated via PWD action.
     var pwd: String = ""
 

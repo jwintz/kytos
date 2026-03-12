@@ -9,7 +9,7 @@ public struct KytosPane: Identifiable, Codable, Hashable, Sendable {
     public var title: String
     public var pwd: String
 
-    public init(id: UUID = UUID(), title: String = "Terminal", pwd: String = "") {
+    public init(id: UUID = UUID(), title: String = "", pwd: String = "") {
         self.id = id
         self.title = title
         self.pwd = pwd
@@ -289,6 +289,25 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
             return .split(.init(direction: s.direction, ratio: s.ratio,
                                 left: updatedPwd(node: s.left, paneID: paneID, pwd: pwd),
                                 right: updatedPwd(node: s.right, paneID: paneID, pwd: pwd)))
+        }
+    }
+
+    // MARK: - Position Path
+
+    /// Returns a human-readable path like "Left > Top" for a pane in the tree.
+    public func positionPath(for paneID: UUID) -> String? {
+        Self.pathToPane(paneID, in: root, path: [])?.joined(separator: " > ")
+    }
+
+    private static func pathToPane(_ id: UUID, in node: KytosSplitNode, path: [String]) -> [String]? {
+        switch node {
+        case .leaf(let pane):
+            return pane.id == id ? path : nil
+        case .split(let s):
+            let leftLabel = s.direction == .horizontal ? "Left" : "Top"
+            let rightLabel = s.direction == .horizontal ? "Right" : "Bottom"
+            return pathToPane(id, in: s.left, path: path + [leftLabel])
+                ?? pathToPane(id, in: s.right, path: path + [rightLabel])
         }
     }
 

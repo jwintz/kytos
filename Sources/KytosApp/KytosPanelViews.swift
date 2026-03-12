@@ -10,10 +10,14 @@ struct KytosSessionsSidebar: View {
     @Environment(KytosWorkspace.self) private var workspace
 
     var body: some View {
-        List(workspace.splitTree.allPanes, id: \.id) { pane in
-            KytosPaneRowView(pane: pane, workspace: workspace)
+        ScrollView {
+            VStack(spacing: 6) {
+                ForEach(workspace.splitTree.allPanes, id: \.id) { pane in
+                    KytosPaneRowView(pane: pane, workspace: workspace)
+                }
+            }
+            .padding(10)
         }
-        .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .background(.clear)
     }
@@ -33,19 +37,21 @@ private struct KytosPaneRowView: View {
                 .fill(isFocused ? Color.accentColor : Color.clear)
                 .frame(width: 6, height: 6)
 
-            Image(systemName: "terminal")
-                .font(.caption)
-                .foregroundStyle(isFocused ? .primary : .secondary)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(pane.title)
-                    .font(.body)
-                    .fontWeight(isFocused ? .medium : .regular)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pane.title.isEmpty ? "shell" : pane.title)
+                    .font(.system(size: 11, weight: isFocused ? .medium : .regular))
                     .lineLimit(1)
+
+                if let posPath = workspace.splitTree.positionPath(for: pane.id), workspace.splitTree.isSplit {
+                    Text(posPath)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
 
                 if !pane.pwd.isEmpty {
                     Text(abbreviatePath(pane.pwd))
-                        .font(.caption2)
+                        .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -68,10 +74,10 @@ private struct KytosPaneRowView: View {
                 .help("Close pane")
             }
         }
-        .padding(.vertical, 2)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .background(isFocused ? Color.accentColor.opacity(0.1) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .glassEffect(in: RoundedRectangle(cornerRadius: 8))
         .onTapGesture {
             workspace.focusedPaneID = pane.id
         }
@@ -190,6 +196,7 @@ struct KytosProcessInfoView: View {
             } else {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(processes) { entry in
+                        let isDeepest = entry.id == processes.last?.id
                         HStack(spacing: 4) {
                             if entry.depth > 0 {
                                 Color.clear.frame(width: CGFloat(entry.depth) * 12)
@@ -198,11 +205,14 @@ struct KytosProcessInfoView: View {
                                     .foregroundStyle(.quaternary)
                             }
                             Circle()
-                                .fill(entry.statusColor)
+                                .fill(isDeepest ? Color.accentColor : entry.statusColor)
                                 .frame(width: 5, height: 5)
                             Text(entry.command)
                                 .font(.system(size: 10, design: .monospaced))
                                 .lineLimit(1)
+                            Text(String(entry.pid))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.tertiary)
                             Spacer()
                             Text(String(format: "%.0f MB", entry.rssMB))
                                 .font(.system(size: 9, design: .monospaced))
@@ -270,14 +280,25 @@ struct KytosProcessInfoView: View {
     @MainActor private func refresh() async {
         // Find the shell PID for the focused surface
         let focusedPaneID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
+        let focusedPwd = workspace.splitTree.findPane(focusedPaneID)?.pwd ?? ""
         let ourPid = Foundation.ProcessInfo.processInfo.processIdentifier
 
-        // Find which shell belongs to this surface by walking children
+        // Find which shell belongs to this surface by CWD matching
         let result = await Task.detached { () -> ([ProcessEntry], SystemStats?, pid_t) in
-            // Find all direct children of Kytos (shells for each surface)
             let children = Self.findAllChildren(of: ourPid)
-            // Use first shell if we can't identify the specific one
-            let shellPid = children.first ?? ourPid
+
+            // Match child whose CWD matches the focused pane's pwd
+            var matchedPid: pid_t?
+            if !focusedPwd.isEmpty {
+                for child in children {
+                    if let cwd = Self.cwdForPid(child), cwd == focusedPwd || cwd.hasPrefix(focusedPwd) || focusedPwd.hasPrefix(cwd) {
+                        matchedPid = child
+                        break
+                    }
+                }
+            }
+            let shellPid = matchedPid ?? children.first ?? ourPid
+
             let tree = Self.processTree(rootPID: shellPid)
             let stats = Self.systemStats()
             return (tree, stats, shellPid)
@@ -286,6 +307,16 @@ struct KytosProcessInfoView: View {
         processes = result.0
         systemStats = result.1
         shellPid = result.2
+    }
+
+    /// Get the current working directory of a process via proc_pidinfo.
+    nonisolated private static func cwdForPid(_ pid: pid_t) -> String? {
+        var vnodeInfo = proc_vnodepathinfo()
+        let size = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &vnodeInfo, Int32(MemoryLayout<proc_vnodepathinfo>.size))
+        guard size > 0 else { return nil }
+        return withUnsafePointer(to: vnodeInfo.pvi_cdir.vip_path) { ptr in
+            ptr.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+        }
     }
 
     // MARK: - Process Tree Builder

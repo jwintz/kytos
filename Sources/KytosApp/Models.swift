@@ -8,7 +8,7 @@ public struct KytosSession: Identifiable, Codable, Hashable {
     public var id: UUID
     public var name: String
 
-    public init(id: UUID = UUID(), name: String = "Terminal") {
+    public init(id: UUID = UUID(), name: String = "") {
         self.id = id
         self.name = name
     }
@@ -169,7 +169,7 @@ public final class KytosAppModel {
     private func writeWidgetSnapshot() {
         let windowList = windows.values.map { workspace -> KytosWidgetWindow in
             let terminals = workspace.splitTree.allPanes.map { pane in
-                KytosWidgetTerminal(id: pane.id, process: "shell")
+                KytosWidgetTerminal(id: pane.id, process: pane.title.isEmpty ? "shell" : pane.title)
             }
             return KytosWidgetWindow(id: workspace.session.id, name: workspace.session.name, terminals: terminals)
         }

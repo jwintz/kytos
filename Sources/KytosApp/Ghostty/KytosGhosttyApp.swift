@@ -176,14 +176,44 @@ final class KytosGhosttyApp {
             }
         }
 
+        // IMPORTANT: Copy all C string data synchronously before dispatching,
+        // because the C pointers in `action` may be freed after this callback returns.
+        let safeAction = SafeAction(from: action)
+
         DispatchQueue.main.async {
-            KytosGhosttyApp.shared.handleAction(action, sourceView: sourceView)
+            KytosGhosttyApp.shared.handleAction(action, sourceView: sourceView, safe: safeAction)
         }
         return true
     }
 
+    /// Pre-extracted string data from ghostty_action_s, safe to use across threads.
+    private struct SafeAction {
+        var title: String?
+        var pwd: String?
+        var searchNeedle: String?
+
+        init(from action: ghostty_action_s) {
+            switch action.tag {
+            case GHOSTTY_ACTION_SET_TITLE:
+                if let ptr = action.action.set_title.title {
+                    self.title = String(cString: ptr)
+                }
+            case GHOSTTY_ACTION_PWD:
+                if let ptr = action.action.pwd.pwd {
+                    self.pwd = String(cString: ptr)
+                }
+            case GHOSTTY_ACTION_START_SEARCH:
+                if let ptr = action.action.start_search.needle {
+                    self.searchNeedle = String(cString: ptr)
+                }
+            default:
+                break
+            }
+        }
+    }
+
     @MainActor
-    private func handleAction(_ action: ghostty_action_s, sourceView: KytosGhosttyView?) {
+    private func handleAction(_ action: ghostty_action_s, sourceView: KytosGhosttyView?, safe: SafeAction = SafeAction(from: ghostty_action_s())) {
         switch action.tag {
         case GHOSTTY_ACTION_NEW_TAB:
             NotificationCenter.default.post(
@@ -225,9 +255,9 @@ final class KytosGhosttyApp {
                 object: nil
             )
         case GHOSTTY_ACTION_SET_TITLE:
-            let title = action.action.set_title
-            if let ptr = title.title {
-                let str = String(cString: ptr)
+            if let str = safe.title {
+                sourceView?.title = str
+                kLog("[Ghostty] SET_TITLE: '\(str)' for view \(sourceView?.paneID?.uuidString.prefix(8) ?? "nil")")
                 NotificationCenter.default.post(
                     name: NSNotification.Name("KytosGhosttySetTitle"),
                     object: sourceView,
@@ -244,10 +274,9 @@ final class KytosGhosttyApp {
         case GHOSTTY_ACTION_RELOAD_CONFIG:
             reloadConfig()
         case GHOSTTY_ACTION_PWD:
-            let pwdAction = action.action.pwd
-            if let ptr = pwdAction.pwd {
-                let pwd = String(cString: ptr)
+            if let pwd = safe.pwd {
                 sourceView?.pwd = pwd
+                kLog("[Ghostty] PWD: '\(pwd)' for view \(sourceView?.paneID?.uuidString.prefix(8) ?? "nil")")
                 NotificationCenter.default.post(
                     name: NSNotification.Name("KytosGhosttyPwd"),
                     object: sourceView,
@@ -276,9 +305,8 @@ final class KytosGhosttyApp {
                 userInfo: ["state": pr.state.rawValue, "progress": pr.progress]
             )
         case GHOSTTY_ACTION_START_SEARCH:
-            let search = action.action.start_search
             var info: [String: Any] = [:]
-            if let ptr = search.needle { info["needle"] = String(cString: ptr) }
+            if let needle = safe.searchNeedle { info["needle"] = needle }
             NotificationCenter.default.post(
                 name: NSNotification.Name("KytosGhosttyStartSearch"),
                 object: sourceView,

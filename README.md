@@ -85,6 +85,30 @@ Sources/KytosTests/               # Unit tests
 - **`KytosWorkspace`** — `@Observable` model holding a single `KytosSession` per window/tab.
 - **`KytosAppModel`** — Manages window-to-workspace mapping, persistence, and tab group restoration using native macOS window tabs.
 
+### Shell Integration & Resource Detection
+
+Ghostty's shell integration injects OSC escape sequences into bash/zsh/fish/elvish/nushell so the terminal receives live updates: OSC 0/2 for the process title, OSC 7 for the working directory. These drive the dynamic toolbar title/subtitle and navigator pane labels.
+
+**Sentinel file** — On startup, libghostty walks up from the executable path looking for a **sentinel file** at:
+
+```
+<ancestor>/Contents/Resources/terminfo/78/xterm-ghostty
+```
+
+The `78/` directory is terminfo's standard hash bucket (`0x78` = `'x'`, for `xterm-ghostty`). If found, ghostty sets its `resources_dir` to `<ancestor>/Contents/Resources/ghostty`, which must contain the `shell-integration/` scripts.
+
+For Kytos, these resources live at:
+
+```
+Kytos.app/Contents/Resources/
+  terminfo/78/xterm-ghostty      ← sentinel (enables resource detection)
+  ghostty/shell-integration/     ← bash, zsh, fish, elvish, nushell scripts
+```
+
+They are copied into the app bundle by the "Copy Ghostty Resources" pre-build script in `project.yml`, sourced from `Resources/` in the repo (which `pixi run build-ghostty` populates from ghostty's `zig-out/share/`).
+
+**Default config files** — `ghostty_config_load_default_files()` (called in `KytosGhosttyApp.init`) loads the user's terminal configuration from ghostty's standard locations (`~/.config/ghostty/config`, XDG paths). This is why all terminal settings (font, colors, cursor, keybindings) are configured via ghostty's own config file rather than Kytos-specific preferences.
+
 ### Build Pipeline
 
 1. **GhosttyKit** — Built from Ghostty source via `zig build` (arm64, ReleaseFast). Produces `Frameworks/GhosttyKit.xcframework` (static library, git-ignored).

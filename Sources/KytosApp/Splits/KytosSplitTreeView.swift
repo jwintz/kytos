@@ -29,6 +29,7 @@ private struct KytosSplitNodeView: View {
 
     @State private var dropZone: KytosSplitDropZone?
     @State private var leafSize: CGSize = .zero
+    @State private var isSelfDragging = false
 
     var body: some View {
         switch node {
@@ -91,30 +92,33 @@ private struct KytosSplitNodeView: View {
 
                 if isSplitContext {
                     VStack {
-                        HStack {
-                            KytosPaneDragHandle(paneID: pane.id)
-                                .padding(4)
-                            Spacer()
-                        }
+                        KytosPaneDragHandle(paneID: pane.id)
+                            .padding(4)
                         Spacer()
                     }
                 }
 
-                // Zone-specific drop overlay (like ghostty)
-                if let zone = dropZone {
+                // Zone-specific drop overlay (like ghostty) — suppress on source pane
+                if !isSelfDragging, let zone = dropZone {
                     zoneOverlay(zone: zone, in: geometry)
                         .allowsHitTesting(false)
                 }
             }
-            .background(
-                Color.clear
-                    .onDrop(of: [.kytosPaneID], delegate: KytosSplitDropDelegate(
-                        dropZone: $dropZone,
-                        viewSize: geometry.size,
-                        targetPaneID: pane.id,
-                        tree: tree
-                    ))
-            )
+            .background {
+                if !isSelfDragging {
+                    Color.clear
+                        .onDrop(of: [.kytosPaneID], delegate: KytosSplitDropDelegate(
+                            dropZone: $dropZone,
+                            viewSize: geometry.size,
+                            targetPaneID: pane.id,
+                            tree: tree
+                        ))
+                }
+            }
+            .onPreferenceChange(KytosDraggingPaneKey.self) { draggingID in
+                isSelfDragging = draggingID == pane.id
+                if isSelfDragging { dropZone = nil }
+            }
         }
     }
 

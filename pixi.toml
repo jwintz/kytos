@@ -11,7 +11,11 @@ gettext = ">=0.22"
 
 [tasks]
 # Build GhosttyKit.xcframework from Ghostty source.
-build-ghostty = { cmd = "bash -c 'set -e; cd /Users/jwintz/Syntropment/ghostty && zig build -Doptimize=ReleaseFast -Demit-xcframework -Dxcframework-target=native && mkdir -p \"$PIXI_PROJECT_ROOT/Frameworks\" && rm -rf \"$PIXI_PROJECT_ROOT/Frameworks/GhosttyKit.xcframework\" && cp -R macos/GhosttyKit.xcframework \"$PIXI_PROJECT_ROOT/Frameworks/\"'", description = "Build GhosttyKit.xcframework from Ghostty source" }
+build-ghostty = { cmd = "bash -c 'set -e; cd /Users/jwintz/Syntropment/ghostty && zig build -Doptimize=ReleaseFast -Demit-xcframework -Dxcframework-target=native && mkdir -p \"$PIXI_PROJECT_ROOT/Frameworks\" && rm -rf \"$PIXI_PROJECT_ROOT/Frameworks/GhosttyKit.xcframework\" && cp -R macos/GhosttyKit.xcframework \"$PIXI_PROJECT_ROOT/Frameworks/\" && mkdir -p \"$PIXI_PROJECT_ROOT/Resources/ghostty\" && cp -R zig-out/share/ghostty/shell-integration \"$PIXI_PROJECT_ROOT/Resources/ghostty/\" && cp -R zig-out/share/terminfo \"$PIXI_PROJECT_ROOT/Resources/\"'", description = "Build GhosttyKit.xcframework and copy shell integration resources" }
+
+# Ensure GhosttyKit.xcframework exists (build only if missing).
+ensure-ghostty = { cmd = "bash -c 'if [ -d \"$PIXI_PROJECT_ROOT/Frameworks/GhosttyKit.xcframework\" ]; then echo \"GhosttyKit.xcframework present.\"; else echo \"GhosttyKit.xcframework missing, building...\"; cd /Users/jwintz/Syntropment/ghostty && zig build -Doptimize=ReleaseFast -Demit-xcframework -Dxcframework-target=native && mkdir -p \"$PIXI_PROJECT_ROOT/Frameworks\" && cp -R macos/GhosttyKit.xcframework \"$PIXI_PROJECT_ROOT/Frameworks/\"; fi'", description = "Ensure GhosttyKit.xcframework exists" }
+
 # Force-regenerate the Xcode project from project.yml (always runs XcodeGen).
 generate = "swift run xcodegen generate --spec project.yml"
 
@@ -22,7 +26,7 @@ generate-if-needed = "bash -c 'test Kytos.xcodeproj/project.pbxproj -nt project.
 # Always build (use for forced rebuild).
 build = { cmd = "xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates", depends-on = ["build-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
 # Build only when sources, project, or submodules are newer than the built binary.
-build-if-needed = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); BIN=\"$BUILT/Kytos.app/Contents/MacOS/Kytos\"; if [ -f \"$BIN\" ] && [ -z \"$(find Sources Frameworks project.yml Kytos.xcodeproj/project.pbxproj -newer \"$BIN\" 2>/dev/null | head -1)\" ]; then echo \"Build up to date.\"; else xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates; fi'", depends-on = ["generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
+build-if-needed = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); BIN=\"$BUILT/Kytos.app/Contents/MacOS/Kytos\"; if [ -f \"$BIN\" ] && [ -z \"$(find Sources Frameworks project.yml Kytos.xcodeproj/project.pbxproj -newer \"$BIN\" 2>/dev/null | head -1)\" ]; then echo \"Build up to date.\"; else xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates; fi'", depends-on = ["ensure-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
 # Run unit tests.
 test = { cmd = "bash Scripts/run-tests.sh", depends-on = ["generate-if-needed"] }
 
