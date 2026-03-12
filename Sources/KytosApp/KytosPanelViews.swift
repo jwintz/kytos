@@ -80,8 +80,11 @@ private struct KytosPaneRowView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.quaternary.opacity(0.5))
+        )
         .contentShape(Rectangle())
-        .glassEffect(in: RoundedRectangle(cornerRadius: 12))
         .onTapGesture {
             workspace.focusedPaneID = pane.id
         }

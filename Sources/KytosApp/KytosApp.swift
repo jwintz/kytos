@@ -406,8 +406,8 @@ struct KytosWindowView: View {
     @State private var stableID: UUID
     @State private var workspace: KytosWorkspace?
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.kelyphosKeybindingRegistry) private var registry
     @State private var windowShellState: KelyphosShellState
+    @State private var keybindingRegistry: KelyphosKeybindingRegistry
     var appModel: KytosAppModel
 
     init(windowID: Binding<UUID?>, appModel: KytosAppModel) {
@@ -419,6 +419,22 @@ struct KytosWindowView: View {
             persistencePrefix: "me.jwintz.kytos",
             panelPrefix: "me.jwintz.kytos.tmp"
         ))
+        // Configure keybinding registry: remove unused kelyphos defaults, add kytos shortcuts
+        let registry = KelyphosKeybindingRegistry()
+        for n in 2...9 {
+            registry.remove(category: "Navigator", label: "Navigator Tab \(n)")
+            registry.remove(category: "Inspector", label: "Inspector Tab \(n)")
+        }
+        registry.removeCategory("Utility")
+        registry.register(category: "Workspace", label: "Close Pane", shortcut: "⌘W")
+        registry.register(category: "Workspace", label: "New Window", shortcut: "⌘N")
+        registry.register(category: "Workspace", label: "New Tab", shortcut: "⌘T")
+        registry.register(category: "Workspace", label: "Split Horizontal", shortcut: "⌘D")
+        registry.register(category: "Workspace", label: "Split Vertical", shortcut: "⇧⌘D")
+        registry.register(category: "Terminal", label: "Find", shortcut: "⌘F")
+        registry.register(category: "Terminal", label: "Find Next", shortcut: "⌘G")
+        registry.register(category: "Terminal", label: "Find Previous", shortcut: "⇧⌘G")
+        self._keybindingRegistry = State(initialValue: registry)
     }
 
     var body: some View {
@@ -488,22 +504,7 @@ struct KytosWindowView: View {
             if let ws = workspace {
                 updateToolbar(workspace: ws)
             }
-            // Remove unused kelyphos defaults (Kytos has 1 navigator tab, 1 inspector tab, 0 utility tabs)
-            for n in 2...9 {
-                registry.remove(category: "Navigator", label: "Navigator Tab \(n)")
-                registry.remove(category: "Inspector", label: "Inspector Tab \(n)")
-            }
-            registry.removeCategory("Utility")
-
-            // Register Kytos workspace shortcuts
-            registry.register(category: "Workspace", label: "Close Pane", shortcut: "⌘W")
-            registry.register(category: "Workspace", label: "New Window", shortcut: "⌘N")
-            registry.register(category: "Workspace", label: "New Tab", shortcut: "⌘T")
-            registry.register(category: "Workspace", label: "Split Horizontal", shortcut: "⌘D")
-            registry.register(category: "Workspace", label: "Split Vertical", shortcut: "⇧⌘D")
-            registry.register(category: "Terminal", label: "Find", shortcut: "⌘F")
-            registry.register(category: "Terminal", label: "Find Next", shortcut: "⌘G")
-            registry.register(category: "Terminal", label: "Find Previous", shortcut: "⇧⌘G")
+            // Keybindings are configured in init via keybindingRegistry
         }
     }
 
@@ -519,7 +520,8 @@ struct KytosWindowView: View {
                 detail: {
                     PaneWorkspaceView()
                 }
-            )
+            ),
+            keybindingRegistry: keybindingRegistry
         )
         .environment(workspace)
         .focusedSceneValue(\.kytosFocusedWindowID, stableID)
