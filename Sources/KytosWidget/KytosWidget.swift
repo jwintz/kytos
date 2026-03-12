@@ -13,12 +13,12 @@ struct KytosTimelineProvider: TimelineProvider {
 
     func getSnapshot(in context: Context, completion: @escaping (KytosWidgetEntry) -> Void) {
         let snapshot = KytosWidgetSnapshot.read() ?? .placeholder()
-        completion(KytosWidgetEntry(date: .now, snapshot: snapshot))
+        completion(KytosWidgetEntry(date: snapshot.date, snapshot: snapshot))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<KytosWidgetEntry>) -> Void) {
         let snapshot = KytosWidgetSnapshot.read() ?? .placeholder()
-        let entry = KytosWidgetEntry(date: .now, snapshot: snapshot)
+        let entry = KytosWidgetEntry(date: snapshot.date, snapshot: snapshot)
         let next = Calendar.current.date(byAdding: .minute, value: 1, to: .now) ?? .now
         let timeline = Timeline(entries: [entry], policy: .after(next))
         completion(timeline)
@@ -57,13 +57,13 @@ struct KytosWidgetView: View {
     var body: some View {
         switch family {
         case .systemSmall:
-            SmallWidgetView(entry: entry)
+            SmallWidgetView(entry: entry).id(entry.snapshot.version)
         case .systemMedium:
-            MediumWidgetView(entry: entry)
+            MediumWidgetView(entry: entry).id(entry.snapshot.version)
         case .systemLarge:
-            LargeWidgetView(entry: entry)
+            LargeWidgetView(entry: entry).id(entry.snapshot.version)
         default:
-            SmallWidgetView(entry: entry)
+            SmallWidgetView(entry: entry).id(entry.snapshot.version)
         }
     }
 }

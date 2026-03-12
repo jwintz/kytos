@@ -87,6 +87,29 @@ Kytos.icon/                       # macOS .icon package compiled by actool
 - **`KytosWorkspace`** — `@Observable` model holding a split tree of panes plus the currently focused pane for one native window/tab.
 - **`KytosAppModel`** — Manages window-to-workspace mapping, persistence, widget snapshots, and native macOS tab restoration.
 
+### Native Windows and Tabs
+
+Kytos uses a single SwiftUI `WindowGroup`, so native macOS windows and native tabs are both backed by `KytosWorkspace` values in `KytosAppModel.windows`.
+
+At shutdown, Kytos persists two pieces of state:
+
+- the workspace map itself (`KytosAppModel_Windows_v7`)
+- a separate list of native tab groups (`KytosAppModel_TabGroups_v1`)
+
+On relaunch, each saved workspace is reopened first, then grouped back into native tabs as soon as the corresponding `NSWindow`s have actually been registered. This avoids the old fixed-delay race where a saved tab group could briefly relaunch as separate windows.
+
+When debugging restoration, remember that:
+
+- a native tab is still just another `NSWindow` instance until AppKit groups it
+- `WindowRegistrar` is the source of truth for when a restored window is real enough to be tabbed
+- closing a tab group saves both the individual workspaces and the group membership, so restoring one without the other produces the wrong shape
+
+### Widget Refresh Behavior
+
+Kytos writes a JSON snapshot for the widget and immediately calls `WidgetCenter.shared.reloadAllTimelines()`, but WidgetKit still caches aggressively on macOS.
+
+For development builds, `pixi run build` and `pixi run run` now re-register the widget extension with `pluginkit -r` followed by `pluginkit -a`, which helps already-pinned desktop widgets pick up a rebuilt extension. If WidgetKit still shows stale UI after a rebuild, remove and re-add the widget from the desktop gallery.
+
 ### Shell Integration & Resource Detection
 
 Ghostty's shell integration injects OSC escape sequences into bash/zsh/fish/elvish/nushell so the terminal receives live updates: OSC 0/2 for the process title, OSC 7 for the working directory. These drive the dynamic toolbar title/subtitle and navigator pane labels.

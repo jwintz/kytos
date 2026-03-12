@@ -481,10 +481,25 @@ struct KytosWindowView: View {
         registry.register(category: "Workspace", label: "New Tab", shortcut: "⌘T")
         registry.register(category: "Workspace", label: "Split Horizontal", shortcut: "⌘D")
         registry.register(category: "Workspace", label: "Split Vertical", shortcut: "⇧⌘D")
+        registry.register(category: "Workspace", label: "Focus Previous Split", shortcut: "⌃⌘[")
+        registry.register(category: "Workspace", label: "Focus Next Split", shortcut: "⌃⌘]")
+        registry.register(category: "Workspace", label: "Focus Split Up/Down/Left/Right", shortcut: "⌃⌥↑/↓/←/→")
+        registry.register(category: "Workspace", label: "Resize Split Up/Down/Left/Right", shortcut: "⌃⇧⌘↑/↓/←/→")
+        registry.register(category: "Workspace", label: "Go to Tab 1…8", shortcut: "⌘1…⌘8")
+        registry.register(category: "Workspace", label: "Go to Last Tab", shortcut: "⌘9")
+        registry.register(category: "Workspace", label: "Toggle Fullscreen", shortcut: "⌘↩")
+        registry.register(category: "Workspace", label: "Toggle Split Zoom", shortcut: "⇧⌘↩")
         registry.register(category: "Terminal", label: "Find", shortcut: "⌘F")
         registry.register(category: "Terminal", label: "Find Next", shortcut: "⌘G")
         registry.register(category: "Terminal", label: "Find Previous", shortcut: "⇧⌘G")
-        registry.register(category: "Terminal", label: "Reset Font Size", shortcut: "⌘R")
+        registry.register(category: "Terminal", label: "Close Search", shortcut: "Esc")
+        registry.register(category: "Terminal", label: "Copy", shortcut: "⌘C")
+        registry.register(category: "Terminal", label: "Paste", shortcut: "⌘V")
+        registry.register(category: "Terminal", label: "Select All", shortcut: "⇧⌘A")
+        registry.register(category: "Terminal", label: "Increase Font Size", shortcut: "⌘= / ⌘+")
+        registry.register(category: "Terminal", label: "Decrease Font Size", shortcut: "⌘-")
+        registry.register(category: "Terminal", label: "Reset Font Size", shortcut: "⌘0 / ⌘R")
+        registry.register(category: "Terminal", label: "Reload Ghostty Config", shortcut: "⇧⌘,")
         self._keybindingRegistry = State(initialValue: registry)
     }
 
@@ -525,26 +540,9 @@ struct KytosWindowView: View {
                 appModel.hasRestoredWindows = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     let unclaimed = appModel.windows.filter { !appModel.isWindowClaimed($0.key) }
+                    appModel.preparePendingTabRestoration(appModel.loadTabGroups())
                     for (savedID, _) in unclaimed {
                         openWindow(id: "main", value: savedID)
-                    }
-                    let savedGroups = appModel.loadTabGroups()
-                    if !savedGroups.isEmpty {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            for group in savedGroups where group.count > 1 {
-                                let groupWindows = group.compactMap { uuid -> NSWindow? in
-                                    NSApp.windows.first {
-                                        !($0 is NSPanel) && $0.contentView != nil &&
-                                        appModel.windowToID[ObjectIdentifier($0)] == uuid
-                                    }
-                                }
-                                guard groupWindows.count > 1, let anchor = groupWindows.first else { continue }
-                                for window in groupWindows.dropFirst() {
-                                    anchor.addTabbedWindow(window, ordered: .above)
-                                }
-                                anchor.makeKeyAndOrderFront(nil)
-                            }
-                        }
                     }
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {

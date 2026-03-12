@@ -105,6 +105,7 @@ public final class KytosAppModel {
 
     /// Set of windowIDs that have been claimed by live windows in this session.
     @ObservationIgnored private var claimedWindowIDs: Set<UUID> = []
+    @ObservationIgnored private var pendingTabGroups: [[UUID]] = []
     @ObservationIgnored public var hasRestoredWindows = false
 
     /// Set by the willTerminate handler to prevent NSWindow.willClose from
@@ -117,6 +118,7 @@ public final class KytosAppModel {
 
     public func registerWindow(_ window: NSWindow, for id: UUID) {
         windowToID[ObjectIdentifier(window)] = id
+        attemptPendingTabRestoration()
     }
 
     public func windowID(for window: NSWindow?) -> UUID? {
@@ -207,7 +209,12 @@ public final class KytosAppModel {
             )
         }
 
-        let snapshot = KytosWidgetSnapshot(date: .now, windows: windowList, processTree: processTree)
+        let snapshot = KytosWidgetSnapshot(
+            date: .now,
+            version: UInt64(Date().timeIntervalSince1970 * 1000),
+            windows: windowList,
+            processTree: processTree
+        )
         KytosWidgetSnapshot.write(snapshot)
         WidgetCenter.shared.reloadAllTimelines()
     }
@@ -250,6 +257,34 @@ public final class KytosAppModel {
         guard let data = UserDefaults.standard.data(forKey: "KytosAppModel_TabGroups_v1"),
               let groups = try? JSONDecoder().decode([[UUID]].self, from: data) else { return [] }
         return groups
+    }
+
+    public func preparePendingTabRestoration(_ groups: [[UUID]]) {
+        pendingTabGroups = groups.filter { $0.count > 1 }
+        attemptPendingTabRestoration()
+    }
+
+    public func attemptPendingTabRestoration() {
+        guard !pendingTabGroups.isEmpty else { return }
+
+        var unresolved: [[UUID]] = []
+        for group in pendingTabGroups {
+            let windows = group.compactMap(window(for:))
+                .filter { !($0 is NSPanel) && $0.contentView != nil }
+            guard windows.count == group.count, let anchor = windows.first else {
+                unresolved.append(group)
+                continue
+            }
+
+            for window in windows.dropFirst() where window !== anchor {
+                if anchor.tabGroup?.windows.contains(where: { $0 === window }) != true {
+                    anchor.addTabbedWindow(window, ordered: .above)
+                }
+            }
+            anchor.makeKeyAndOrderFront(nil)
+        }
+
+        pendingTabGroups = unresolved
     }
 
     private func load() {

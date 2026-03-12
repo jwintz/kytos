@@ -186,19 +186,32 @@ private struct KytosSplitDropDelegate: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         let zone = KytosSplitDropZone.zone(for: info.location, in: viewSize)
-        // Clear overlay immediately (synchronous, before any async work)
-        DispatchQueue.main.async { [self] in
-            dropZone = nil
+        let providers = info.itemProviders(for: [.kytosPaneID])
+        guard let provider = providers.first else {
+            DispatchQueue.main.async { [self] in
+                dropZone = nil
+            }
+            return false
         }
 
-        let providers = info.itemProviders(for: [.kytosPaneID])
-        guard let provider = providers.first else { return false }
-
         provider.loadDataRepresentation(forTypeIdentifier: UTType.kytosPaneID.identifier) { data, _ in
-            guard let data, let transfer = try? JSONDecoder().decode(KytosPaneTransfer.self, from: data) else { return }
-            guard transfer.paneID != targetPaneID else { return }
+            guard let data,
+                  let transfer = try? JSONDecoder().decode(KytosPaneTransfer.self, from: data)
+            else {
+                DispatchQueue.main.async { [self] in
+                    dropZone = nil
+                }
+                return
+            }
+            guard transfer.paneID != targetPaneID else {
+                DispatchQueue.main.async { [self] in
+                    dropZone = nil
+                }
+                return
+            }
             DispatchQueue.main.async {
                 tree.movePane(sourceID: transfer.paneID, targetID: targetPaneID, zone: zone)
+                dropZone = nil
             }
         }
         return true

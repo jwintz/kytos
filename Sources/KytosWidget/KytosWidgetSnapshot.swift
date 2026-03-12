@@ -39,13 +39,20 @@ public struct KytosWidgetProcessNode: Codable, Identifiable {
 
 public struct KytosWidgetSnapshot: Codable {
     public let date: Date
+    public let version: UInt64
     public let windows: [KytosWidgetWindow]
     /// Flattened process tree for large widget display.
     public let processTree: [KytosWidgetProcessNode]
     public var totalTerminals: Int { windows.reduce(0) { $0 + $1.terminalCount } }
 
-    public init(date: Date, windows: [KytosWidgetWindow], processTree: [KytosWidgetProcessNode] = []) {
+    public init(
+        date: Date,
+        version: UInt64 = 0,
+        windows: [KytosWidgetWindow],
+        processTree: [KytosWidgetProcessNode] = []
+    ) {
         self.date = date
+        self.version = version
         self.windows = windows
         self.processTree = processTree
     }
@@ -53,6 +60,7 @@ public struct KytosWidgetSnapshot: Codable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         date = try c.decode(Date.self, forKey: .date)
+        version = try c.decodeIfPresent(UInt64.self, forKey: .version) ?? 0
         windows = try c.decode([KytosWidgetWindow].self, forKey: .windows)
         processTree = try c.decodeIfPresent([KytosWidgetProcessNode].self, forKey: .processTree) ?? []
     }
@@ -95,6 +103,7 @@ public struct KytosWidgetSnapshot: Codable {
     public static func placeholder() -> KytosWidgetSnapshot {
         KytosWidgetSnapshot(
             date: .now,
+            version: 0,
             windows: [
                 KytosWidgetWindow(id: UUID(), name: "main", terminals: [
                     KytosWidgetTerminal(id: UUID(), process: "zsh"),

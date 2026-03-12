@@ -42,8 +42,10 @@ targets:
         basedOnDependencyAnalysis: false
         script: |
           LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+          WIDGET_PATH="${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/PlugIns/KytosWidget.appex"
           "$LSREGISTER" -f "${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app" 2>/dev/null || true
-          pluginkit -a "${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/PlugIns/KytosWidget.appex" 2>/dev/null || true
+          pluginkit -r "$WIDGET_PATH" 2>/dev/null || true
+          pluginkit -a "$WIDGET_PATH" 2>/dev/null || true
 
     info:
       path: Sources/KytosApp/Info.plist
