@@ -524,12 +524,15 @@ struct KytosWindowView: View {
         .onChange(of: workspace.focusedPaneID) { _, _ in
             updateToolbar(workspace: workspace)
         }
-        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
-            let panes = workspace.splitTree.allPanes
-            Task {
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                let panes = workspace.splitTree.allPanes
+                kLog("[ProcessPoll] tick, \(panes.count) panes")
                 let updates = await Task.detached {
                     KytosProcessUtil.detectProcessNames(for: panes)
                 }.value
+                kLog("[ProcessPoll] got \(updates.count) updates: \(updates.map { "\($0.0.uuidString.prefix(4))=\($0.1)" })")
                 for (id, name) in updates {
                     workspace.splitTree.updateProcessName(name, for: id)
                 }

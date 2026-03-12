@@ -32,3 +32,6 @@ mksh_bin
 
 # Frameworks (built on demand via pixi run build-ghostty)
 Frameworks/GhosttyKit.xcframework/
+
+# Ghostty resources (copied by pixi run build-ghostty)
+Resources/
