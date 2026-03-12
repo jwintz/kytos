@@ -240,6 +240,8 @@ struct PaneWorkspaceView: View {
                 NSApplication.shared.keyWindow?.performClose(nil)
                 return
             }
+            // Explicitly close the surface to free the PTY and kill child processes
+            KytosGhosttyView.view(for: focusedID)?.closeSurface()
             if let newFocusID = workspace.splitTree.remove(paneID: focusedID) {
                 workspace.focusedPaneID = newFocusID
             }
@@ -269,6 +271,15 @@ struct PaneWorkspaceView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosSearchPrevious"))) { _ in
             guard searchState.isVisible else { return }
             searchState.searchPrevious()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosResetFontSize"))) { _ in
+            let focusedID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
+            guard let view = KytosGhosttyView.view(for: focusedID),
+                  let surface = view.surface else { return }
+            let cmd = "reset_font_size"
+            _ = cmd.withCString { ptr in
+                ghostty_surface_binding_action(surface, ptr, UInt(cmd.utf8.count))
+            }
         }
     }
 }
@@ -342,6 +353,12 @@ struct KytosApp: App {
                 case 5: // Cmd+G — next search match
                     NotificationCenter.default.post(
                         name: NSNotification.Name("KytosSearchNext"),
+                        object: nil
+                    )
+                    return nil
+                case 15: // Cmd+R — reset font size
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("KytosResetFontSize"),
                         object: nil
                     )
                     return nil
@@ -434,6 +451,7 @@ struct KytosWindowView: View {
         registry.register(category: "Terminal", label: "Find", shortcut: "⌘F")
         registry.register(category: "Terminal", label: "Find Next", shortcut: "⌘G")
         registry.register(category: "Terminal", label: "Find Previous", shortcut: "⇧⌘G")
+        registry.register(category: "Terminal", label: "Reset Font Size", shortcut: "⌘R")
         self._keybindingRegistry = State(initialValue: registry)
     }
 
@@ -526,6 +544,20 @@ struct KytosWindowView: View {
         .environment(workspace)
         .focusedSceneValue(\.kytosFocusedWindowID, stableID)
         .background { WindowRegistrar(windowID: stableID) }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyNewTab"))) { _ in
+            openWindow(id: "main", value: UUID())
+            // Group the new window as a tab of the current window
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                guard let currentWindow = NSApp.keyWindow else { return }
+                if let newWindow = NSApp.windows.last(where: { $0 !== currentWindow && !($0 is NSPanel) && $0.contentView != nil }) {
+                    currentWindow.addTabbedWindow(newWindow, ordered: .above)
+                    newWindow.makeKeyAndOrderFront(nil)
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyNewWindow"))) { _ in
+            openWindow(id: "main", value: UUID())
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttySetTitle"))) { _ in
             // SET_TITLE fires on preexec (command launch) and precmd (prompt return)
             refreshProcessNames(workspace: workspace)

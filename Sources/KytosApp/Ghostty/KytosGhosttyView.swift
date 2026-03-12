@@ -52,6 +52,18 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
 
+    /// Explicitly close the ghostty surface, freeing the PTY and killing child processes.
+    /// Call this when the pane is removed from the split tree.
+    func closeSurface() {
+        if let surface {
+            ghostty_surface_free(surface)
+            self.surface = nil
+        }
+        if let paneID {
+            KytosGhosttyView.viewRegistry.removeValue(forKey: paneID)
+        }
+    }
+
     deinit {
         let savedPaneID = self.paneID
         if let surface { ghostty_surface_free(surface) }
@@ -376,6 +388,7 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
         if flags == .command {
             switch event.keyCode {
             case 12: return false  // Cmd+Q → app quit
+            case 15: return false  // Cmd+R → reset font size
             case 29: return false  // Cmd+0 → reset zoom
             case 18: return false  // Cmd+1 → first tab
             case 43: return false  // Cmd+, → settings

@@ -63,11 +63,17 @@ private struct KytosPaneRowView: View {
                 }
             }
 
-            // Close button (visible on hover, only if multiple panes)
-            if isHovering && workspace.splitTree.isSplit {
+            // Close button (visible on hover)
+            if isHovering {
                 Button {
-                    if let newFocusID = workspace.splitTree.remove(paneID: pane.id) {
-                        workspace.focusedPaneID = newFocusID
+                    KytosGhosttyView.view(for: pane.id)?.closeSurface()
+                    if workspace.splitTree.isSplit {
+                        if let newFocusID = workspace.splitTree.remove(paneID: pane.id) {
+                            workspace.focusedPaneID = newFocusID
+                        }
+                    } else {
+                        // Last pane — close the window
+                        NSApplication.shared.keyWindow?.performClose(nil)
                     }
                 } label: {
                     Image(systemName: "xmark")
