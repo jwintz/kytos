@@ -38,7 +38,7 @@ private struct KytosPaneRowView: View {
                 .frame(width: 6, height: 6)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(pane.title.isEmpty ? "shell" : pane.title)
+                Text(pane.processName.isEmpty ? "shell" : pane.processName)
                     .font(.system(size: 11, weight: isFocused ? .medium : .regular))
                     .lineLimit(1)
 
@@ -93,10 +93,124 @@ private struct KytosPaneRowView: View {
     }
 }
 
-// MARK: - Process Info View
+// MARK: - Process Utilities
 
 import AppKit
 import Darwin
+
+/// Shared process detection utilities used by inspector, toolbar, and navigator.
+enum KytosProcessUtil {
+    /// Get the current working directory of a process via proc_pidinfo.
+    static func cwdForPid(_ pid: pid_t) -> String? {
+        var vnodeInfo = proc_vnodepathinfo()
+        let size = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &vnodeInfo, Int32(MemoryLayout<proc_vnodepathinfo>.size))
+        guard size > 0 else { return nil }
+        return withUnsafePointer(to: vnodeInfo.pvi_cdir.vip_path) { ptr in
+            ptr.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+        }
+    }
+
+    /// Find all direct child PIDs of a parent process.
+    static func findAllChildren(of parentPid: pid_t) -> [pid_t] {
+        let bufferSize = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
+        guard bufferSize > 0 else { return [] }
+        let count = Int(bufferSize) / MemoryLayout<pid_t>.size
+        var pids = [pid_t](repeating: 0, count: count)
+        let actual = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids, bufferSize)
+        let actualCount = Int(actual) / MemoryLayout<pid_t>.size
+
+        var children: [pid_t] = []
+        for i in 0..<actualCount {
+            let pid = pids[i]
+            guard pid > 0 else { continue }
+            var bsdInfo = proc_bsdinfo()
+            let size = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsdInfo, Int32(MemoryLayout<proc_bsdinfo>.size))
+            if size > 0 && bsdInfo.pbi_ppid == UInt32(parentPid) {
+                children.append(pid)
+            }
+        }
+        return children.sorted()
+    }
+
+    /// Walk down the process tree to find the deepest single-child descendant.
+    static func findDeepestChild(of pid: pid_t) -> pid_t {
+        var current = pid
+        for _ in 0..<10 {
+            let children = findAllChildren(of: current)
+            guard let child = children.first, children.count == 1 else { break }
+            current = child
+        }
+        return current
+    }
+
+    /// Get the process name (comm) for a PID.
+    static func processName(of pid: pid_t) -> String? {
+        var bsdInfo = proc_bsdinfo()
+        let size = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsdInfo, Int32(MemoryLayout<proc_bsdinfo>.size))
+        guard size > 0 else { return nil }
+        return withUnsafePointer(to: bsdInfo.pbi_comm) { ptr in
+            ptr.withMemoryRebound(to: CChar.self, capacity: Int(MAXCOMLEN)) { String(cString: $0) }
+        }
+    }
+
+    /// Info about a shell process (grandchild of Kytos, child of login).
+    struct ShellInfo {
+        let shellPid: pid_t
+        let cwd: String
+    }
+
+    /// Find the shell processes for all panes.
+    /// Kytos → login → zsh (shell). We match panes to shells by CWD.
+    static func findShells() -> [ShellInfo] {
+        let ourPid = Foundation.ProcessInfo.processInfo.processIdentifier
+        let directChildren = findAllChildren(of: ourPid)
+        var shells: [ShellInfo] = []
+        for child in directChildren {
+            // Each direct child is typically /usr/bin/login; its first child is the shell
+            let grandchildren = findAllChildren(of: child)
+            if let shellPid = grandchildren.first {
+                let cwd = cwdForPid(shellPid) ?? ""
+                shells.append(ShellInfo(shellPid: shellPid, cwd: cwd))
+            }
+        }
+        return shells
+    }
+
+    /// Match a shell to a pane by CWD. Returns the shell PID or nil.
+    static func matchShell(for pane: KytosPane, from shells: [ShellInfo], excluding used: Set<pid_t>) -> pid_t? {
+        guard !pane.pwd.isEmpty else { return nil }
+        for shell in shells where !used.contains(shell.shellPid) {
+            if shell.cwd == pane.pwd || shell.cwd.hasPrefix(pane.pwd) || pane.pwd.hasPrefix(shell.cwd) {
+                return shell.shellPid
+            }
+        }
+        return nil
+    }
+
+    /// Detect process names for a list of panes. Returns [(paneID, processName)].
+    /// Safe to call from a detached task (no MainActor dependency).
+    static func detectProcessNames(for panes: [KytosPane]) -> [(UUID, String)] {
+        let shells = findShells()
+
+        var usedShells = Set<pid_t>()
+        var updates: [(UUID, String)] = []
+        for pane in panes {
+            var shellPid = matchShell(for: pane, from: shells, excluding: usedShells)
+            if shellPid == nil, let first = shells.first(where: { !usedShells.contains($0.shellPid) }) {
+                shellPid = first.shellPid
+            }
+            if let sp = shellPid { usedShells.insert(sp) }
+
+            let target = shellPid ?? Foundation.ProcessInfo.processInfo.processIdentifier
+            let fgPid = findDeepestChild(of: target)
+            let name = processName(of: fgPid) ?? "shell"
+            updates.append((pane.id, name))
+        }
+        return updates
+    }
+}
+
+// MARK: - Process Info View
 
 struct ProcessEntry: Identifiable {
     let id = UUID()
@@ -159,16 +273,20 @@ struct KytosProcessInfoView: View {
 
     private var sessionHeader: some View {
         VStack(alignment: .leading, spacing: 6) {
+            let focusedID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
+            let pane = workspace.splitTree.findPane(focusedID) ?? workspace.splitTree.firstLeaf
             HStack(spacing: 6) {
                 Circle()
                     .fill(Color.primary.opacity(0.6))
                     .frame(width: 7, height: 7)
-                Text(workspace.session.name)
+                Text(pane.processName.isEmpty ? "shell" : pane.processName)
                     .font(.system(size: 11, weight: .medium))
                 Spacer()
-                Text(workspace.session.id.uuidString.prefix(8))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                if shellPid > 0 {
+                    Text(String(shellPid))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(12)
@@ -278,26 +396,13 @@ struct KytosProcessInfoView: View {
     }
 
     @MainActor private func refresh() async {
-        // Find the shell PID for the focused surface
         let focusedPaneID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
-        let focusedPwd = workspace.splitTree.findPane(focusedPaneID)?.pwd ?? ""
-        let ourPid = Foundation.ProcessInfo.processInfo.processIdentifier
+        let focusedPane = workspace.splitTree.findPane(focusedPaneID) ?? workspace.splitTree.firstLeaf
 
-        // Find which shell belongs to this surface by CWD matching
         let result = await Task.detached { () -> ([ProcessEntry], SystemStats?, pid_t) in
-            let children = Self.findAllChildren(of: ourPid)
-
-            // Match child whose CWD matches the focused pane's pwd
-            var matchedPid: pid_t?
-            if !focusedPwd.isEmpty {
-                for child in children {
-                    if let cwd = Self.cwdForPid(child), cwd == focusedPwd || cwd.hasPrefix(focusedPwd) || focusedPwd.hasPrefix(cwd) {
-                        matchedPid = child
-                        break
-                    }
-                }
-            }
-            let shellPid = matchedPid ?? children.first ?? ourPid
+            let shells = KytosProcessUtil.findShells()
+            let matched = KytosProcessUtil.matchShell(for: focusedPane, from: shells, excluding: [])
+            let shellPid = matched ?? shells.first?.shellPid ?? Foundation.ProcessInfo.processInfo.processIdentifier
 
             let tree = Self.processTree(rootPID: shellPid)
             let stats = Self.systemStats()
@@ -307,39 +412,6 @@ struct KytosProcessInfoView: View {
         processes = result.0
         systemStats = result.1
         shellPid = result.2
-    }
-
-    /// Get the current working directory of a process via proc_pidinfo.
-    nonisolated private static func cwdForPid(_ pid: pid_t) -> String? {
-        var vnodeInfo = proc_vnodepathinfo()
-        let size = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &vnodeInfo, Int32(MemoryLayout<proc_vnodepathinfo>.size))
-        guard size > 0 else { return nil }
-        return withUnsafePointer(to: vnodeInfo.pvi_cdir.vip_path) { ptr in
-            ptr.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
-        }
-    }
-
-    // MARK: - Process Tree Builder
-
-    nonisolated private static func findAllChildren(of parentPid: pid_t) -> [pid_t] {
-        let bufferSize = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
-        guard bufferSize > 0 else { return [] }
-        let count = Int(bufferSize) / MemoryLayout<pid_t>.size
-        var pids = [pid_t](repeating: 0, count: count)
-        let actual = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids, bufferSize)
-        let actualCount = Int(actual) / MemoryLayout<pid_t>.size
-
-        var children: [pid_t] = []
-        for i in 0..<actualCount {
-            let pid = pids[i]
-            guard pid > 0 else { continue }
-            var bsdInfo = proc_bsdinfo()
-            let size = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsdInfo, Int32(MemoryLayout<proc_bsdinfo>.size))
-            if size > 0 && bsdInfo.pbi_ppid == UInt32(parentPid) {
-                children.append(pid)
-            }
-        }
-        return children.sorted()
     }
 
     nonisolated private static func processTree(rootPID: pid_t) -> [ProcessEntry] {
@@ -503,8 +575,9 @@ final class KytosProcessMonitor {
         let capturedPrevTime = prevSampleTime
 
         Task.detached {
-            let shellPid = Self.findChildProcess(of: ourPid)
-            let fgPid = shellPid > 0 ? Self.findDeepestChild(of: shellPid) : shellPid
+            let children = KytosProcessUtil.findAllChildren(of: ourPid)
+            let shellPid = children.first ?? ourPid
+            let fgPid = shellPid > 0 ? KytosProcessUtil.findDeepestChild(of: shellPid) : shellPid
             let targetPid = fgPid > 0 ? fgPid : (shellPid > 0 ? shellPid : ourPid)
 
             var taskInfo = proc_taskinfo()
@@ -557,35 +630,6 @@ final class KytosProcessMonitor {
         }
     }
 
-    nonisolated private static func findChildProcess(of parentPid: pid_t) -> pid_t {
-        let bufferSize = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
-        guard bufferSize > 0 else { return 0 }
-        let count = Int(bufferSize) / MemoryLayout<pid_t>.size
-        var pids = [pid_t](repeating: 0, count: count)
-        let actual = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids, bufferSize)
-        let actualCount = Int(actual) / MemoryLayout<pid_t>.size
-
-        for i in 0..<actualCount {
-            let pid = pids[i]
-            guard pid > 0 else { continue }
-            var bsdInfo = proc_bsdinfo()
-            let size = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsdInfo, Int32(MemoryLayout<proc_bsdinfo>.size))
-            if size > 0 && bsdInfo.pbi_ppid == UInt32(parentPid) {
-                return pid
-            }
-        }
-        return 0
-    }
-
-    nonisolated private static func findDeepestChild(of pid: pid_t) -> pid_t {
-        var current = pid
-        for _ in 0..<10 {
-            let child = findChildProcess(of: current)
-            if child <= 0 { break }
-            current = child
-        }
-        return current
-    }
 }
 
 struct KytosProcessInfo {

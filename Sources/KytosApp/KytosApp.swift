@@ -513,26 +513,28 @@ struct KytosWindowView: View {
         .environment(workspace)
         .focusedSceneValue(\.kytosFocusedWindowID, stableID)
         .background { WindowRegistrar(windowID: stableID) }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttySetTitle"))) { notif in
-            guard let sourceView = notif.object as? KytosGhosttyView,
-                  let paneID = sourceView.paneID else { return }
-            let focusedID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
-            guard paneID == focusedID else { return }
-            let title = notif.userInfo?["title"] as? String ?? ""
-            kLog("[Toolbar] SET_TITLE for focused pane: '\(title)'")
-            windowShellState.title = title.isEmpty ? "Kytos" : title
-        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyPwd"))) { notif in
             guard let sourceView = notif.object as? KytosGhosttyView,
                   let paneID = sourceView.paneID else { return }
             let focusedID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
             guard paneID == focusedID else { return }
             let pwd = notif.userInfo?["pwd"] as? String ?? ""
-            kLog("[Toolbar] PWD for focused pane: '\(pwd)'")
             windowShellState.subtitle = pwd.isEmpty ? "" : abbreviatePath(pwd)
         }
         .onChange(of: workspace.focusedPaneID) { _, _ in
             updateToolbar(workspace: workspace)
+        }
+        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+            let panes = workspace.splitTree.allPanes
+            Task {
+                let updates = await Task.detached {
+                    KytosProcessUtil.detectProcessNames(for: panes)
+                }.value
+                for (id, name) in updates {
+                    workspace.splitTree.updateProcessName(name, for: id)
+                }
+                updateToolbar(workspace: workspace)
+            }
         }
         .onChange(of: windowShellState.navigatorVisible) { _, _ in
             windowShellState.savePanelState()
@@ -548,13 +550,10 @@ struct KytosWindowView: View {
     private func updateToolbar(workspace: KytosWorkspace) {
         let id = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
         if let pane = workspace.splitTree.findPane(id) {
-            let newTitle = pane.title.isEmpty ? "Kytos" : pane.title
+            let newTitle = pane.processName.isEmpty ? "Kytos" : pane.processName
             let newSubtitle = pane.pwd.isEmpty ? "" : abbreviatePath(pane.pwd)
-            kLog("[Toolbar] updateToolbar: pane=\(id.uuidString.prefix(8)) title='\(pane.title)' pwd='\(pane.pwd)' → title='\(newTitle)' subtitle='\(newSubtitle)'")
             windowShellState.title = newTitle
             windowShellState.subtitle = newSubtitle
-        } else {
-            kLog("[Toolbar] updateToolbar: pane \(id.uuidString.prefix(8)) NOT FOUND")
         }
     }
 

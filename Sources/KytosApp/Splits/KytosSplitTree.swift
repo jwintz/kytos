@@ -4,15 +4,29 @@ import Foundation
 
 // MARK: - Pane
 
-public struct KytosPane: Identifiable, Codable, Hashable, Sendable {
+public struct KytosPane: Identifiable, Hashable, Sendable {
     public var id: UUID
     public var title: String
     public var pwd: String
+    public var processName: String
 
-    public init(id: UUID = UUID(), title: String = "", pwd: String = "") {
+    public init(id: UUID = UUID(), title: String = "", pwd: String = "", processName: String = "") {
         self.id = id
         self.title = title
         self.pwd = pwd
+        self.processName = processName
+    }
+}
+
+extension KytosPane: Codable {
+    enum CodingKeys: String, CodingKey { case id, title, pwd, processName }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        pwd = try c.decodeIfPresent(String.self, forKey: .pwd) ?? ""
+        processName = try c.decodeIfPresent(String.self, forKey: .processName) ?? ""
     }
 }
 
@@ -272,6 +286,23 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
             return .split(.init(direction: s.direction, ratio: s.ratio,
                                 left: updatedTitle(node: s.left, paneID: paneID, title: title),
                                 right: updatedTitle(node: s.right, paneID: paneID, title: title)))
+        }
+    }
+
+    /// Update pane process name by ID.
+    public func updateProcessName(_ name: String, for paneID: UUID) {
+        root = Self.updatedProcessName(node: root, paneID: paneID, name: name)
+    }
+
+    private static func updatedProcessName(node: KytosSplitNode, paneID: UUID, name: String) -> KytosSplitNode {
+        switch node {
+        case .leaf(var pane):
+            if pane.id == paneID { pane.processName = name }
+            return .leaf(pane)
+        case .split(let s):
+            return .split(.init(direction: s.direction, ratio: s.ratio,
+                                left: updatedProcessName(node: s.left, paneID: paneID, name: name),
+                                right: updatedProcessName(node: s.right, paneID: paneID, name: name)))
         }
     }
 

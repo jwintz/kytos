@@ -169,7 +169,7 @@ public final class KytosAppModel {
     private func writeWidgetSnapshot() {
         let windowList = windows.values.map { workspace -> KytosWidgetWindow in
             let terminals = workspace.splitTree.allPanes.map { pane in
-                KytosWidgetTerminal(id: pane.id, process: pane.title.isEmpty ? "shell" : pane.title)
+                KytosWidgetTerminal(id: pane.id, process: pane.processName.isEmpty ? "shell" : pane.processName)
             }
             return KytosWidgetWindow(id: workspace.session.id, name: workspace.session.name, terminals: terminals)
         }
