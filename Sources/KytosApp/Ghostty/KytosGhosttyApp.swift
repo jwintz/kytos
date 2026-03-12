@@ -216,119 +216,107 @@ final class KytosGhosttyApp {
     private func handleAction(_ action: ghostty_action_s, sourceView: KytosGhosttyView?, safe: SafeAction = SafeAction(from: ghostty_action_s())) {
         switch action.tag {
         case GHOSTTY_ACTION_NEW_TAB:
-            NotificationCenter.default.post(
-                name: NSNotification.Name("KytosGhosttyNewTab"),
-                object: nil
-            )
+            Self.postWindowScopedNotification(name: NSNotification.Name("KytosGhosttyNewTab"), sourceView: sourceView)
         case GHOSTTY_ACTION_NEW_WINDOW:
-            NotificationCenter.default.post(
-                name: NSNotification.Name("KytosGhosttyNewWindow"),
-                object: nil
-            )
+            Self.postWindowScopedNotification(name: NSNotification.Name("KytosGhosttyNewWindow"), sourceView: sourceView)
         case GHOSTTY_ACTION_NEW_SPLIT:
             let splitDir = action.action.new_split
             let direction: KytosSplitDirection = (splitDir == GHOSTTY_SPLIT_DIRECTION_DOWN || splitDir == GHOSTTY_SPLIT_DIRECTION_UP)
                 ? .vertical : .horizontal
-            NotificationCenter.default.post(
+            Self.postWindowScopedNotification(
                 name: NSNotification.Name("KytosGhosttyNewSplit"),
-                object: sourceView,
+                sourceView: sourceView,
                 userInfo: ["direction": direction]
             )
         case GHOSTTY_ACTION_GOTO_SPLIT:
             let gotoDir = action.action.goto_split
             kLog("[Ghostty] GOTO_SPLIT action: rawValue=\(gotoDir.rawValue)")
-            NotificationCenter.default.post(
+            Self.postWindowScopedNotification(
                 name: NSNotification.Name("KytosGhosttyGotoSplit"),
-                object: sourceView,
+                sourceView: sourceView,
                 userInfo: ["direction": gotoDir.rawValue]
             )
         case GHOSTTY_ACTION_RESIZE_SPLIT:
             let resize = action.action.resize_split
-            NotificationCenter.default.post(
+            Self.postWindowScopedNotification(
                 name: NSNotification.Name("KytosGhosttyResizeSplit"),
-                object: sourceView,
+                sourceView: sourceView,
                 userInfo: ["amount": resize.amount, "direction": resize.direction]
             )
         case GHOSTTY_ACTION_EQUALIZE_SPLITS:
-            NotificationCenter.default.post(
-                name: NSNotification.Name("KytosGhosttyEqualizeSplits"),
-                object: nil
-            )
+            Self.postWindowScopedNotification(name: NSNotification.Name("KytosGhosttyEqualizeSplits"), sourceView: sourceView)
         case GHOSTTY_ACTION_SET_TITLE:
             if let str = safe.title {
                 sourceView?.title = str
                 kLog("[Ghostty] SET_TITLE: '\(str)' for view \(sourceView?.paneID?.uuidString.prefix(8) ?? "nil")")
-                NotificationCenter.default.post(
+                Self.postWindowScopedNotification(
                     name: NSNotification.Name("KytosGhosttySetTitle"),
-                    object: sourceView,
+                    sourceView: sourceView,
                     userInfo: ["title": str]
                 )
             }
         case GHOSTTY_ACTION_COLOR_CHANGE:
             kLog("[Ghostty] Color change action")
         case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
-            NotificationCenter.default.post(
-                name: NSNotification.Name("KytosGhosttyChildExited"),
-                object: nil
-            )
+            Self.postWindowScopedNotification(name: NSNotification.Name("KytosGhosttyChildExited"), sourceView: sourceView)
         case GHOSTTY_ACTION_RELOAD_CONFIG:
             reloadConfig()
         case GHOSTTY_ACTION_PWD:
             if let pwd = safe.pwd {
                 sourceView?.pwd = pwd
                 kLog("[Ghostty] PWD: '\(pwd)' for view \(sourceView?.paneID?.uuidString.prefix(8) ?? "nil")")
-                NotificationCenter.default.post(
+                Self.postWindowScopedNotification(
                     name: NSNotification.Name("KytosGhosttyPwd"),
-                    object: sourceView,
+                    sourceView: sourceView,
                     userInfo: ["pwd": pwd]
                 )
             }
         case GHOSTTY_ACTION_SCROLLBAR:
             let sb = action.action.scrollbar
-            NotificationCenter.default.post(
+            Self.postWindowScopedNotification(
                 name: NSNotification.Name("KytosGhosttyScrollbar"),
-                object: sourceView,
+                sourceView: sourceView,
                 userInfo: ["total": sb.total, "offset": sb.offset, "len": sb.len]
             )
         case GHOSTTY_ACTION_CELL_SIZE:
             let cs = action.action.cell_size
-            NotificationCenter.default.post(
+            Self.postWindowScopedNotification(
                 name: NSNotification.Name("KytosGhottyCellSize"),
-                object: sourceView,
+                sourceView: sourceView,
                 userInfo: ["width": cs.width, "height": cs.height]
             )
         case GHOSTTY_ACTION_PROGRESS_REPORT:
             let pr = action.action.progress_report
-            NotificationCenter.default.post(
+            Self.postWindowScopedNotification(
                 name: NSNotification.Name("KytosGhosttyProgressReport"),
-                object: sourceView,
+                sourceView: sourceView,
                 userInfo: ["state": pr.state.rawValue, "progress": pr.progress]
             )
         case GHOSTTY_ACTION_START_SEARCH:
             var info: [String: Any] = [:]
             if let needle = safe.searchNeedle { info["needle"] = needle }
-            NotificationCenter.default.post(
+            Self.postWindowScopedNotification(
                 name: NSNotification.Name("KytosGhosttyStartSearch"),
-                object: sourceView,
+                sourceView: sourceView,
                 userInfo: info
             )
         case GHOSTTY_ACTION_END_SEARCH:
-            NotificationCenter.default.post(
+            Self.postWindowScopedNotification(
                 name: NSNotification.Name("KytosGhosttyEndSearch"),
-                object: sourceView
+                sourceView: sourceView
             )
         case GHOSTTY_ACTION_SEARCH_TOTAL:
             let total = action.action.search_total.total
-            NotificationCenter.default.post(
+            Self.postWindowScopedNotification(
                 name: NSNotification.Name("KytosGhosttySearchTotal"),
-                object: sourceView,
+                sourceView: sourceView,
                 userInfo: ["total": total]
             )
         case GHOSTTY_ACTION_SEARCH_SELECTED:
             let selected = action.action.search_selected.selected
-            NotificationCenter.default.post(
+            Self.postWindowScopedNotification(
                 name: NSNotification.Name("KytosGhosttySearchSelected"),
-                object: sourceView,
+                sourceView: sourceView,
                 userInfo: ["selected": selected]
             )
         default:
@@ -342,13 +330,28 @@ final class KytosGhosttyApp {
         state: UnsafeMutableRawPointer?
     ) -> Bool {
         guard let state else { return false }
-        guard let str = NSPasteboard.general.string(forType: .string) else {
-            ghostty_surface_complete_clipboard_request(nil, nil, state, false)
+        let sourceView = userdata.map { Unmanaged<KytosGhosttyView>.fromOpaque($0).takeUnretainedValue() }
+        guard let surface = sourceView?.surface else {
+            kLog("[Ghostty] Clipboard read ignored: missing surface")
+            return false
+        }
+        let str = if Thread.isMainThread {
+            NSPasteboard.general.string(forType: .string)
+        } else {
+            DispatchQueue.main.sync {
+                NSPasteboard.general.string(forType: .string)
+            }
+        }
+        guard let str else {
+            ghostty_surface_complete_clipboard_request(surface, nil, state, false)
             return true
         }
-        str.withCString { ptr in
-            ghostty_surface_complete_clipboard_request(nil, ptr, state, true)
+        guard let duplicated = strdup(str) else {
+            ghostty_surface_complete_clipboard_request(surface, nil, state, false)
+            return true
         }
+        ghostty_surface_complete_clipboard_request(surface, duplicated, state, true)
+        free(duplicated)
         return true
     }
 
@@ -360,7 +363,14 @@ final class KytosGhosttyApp {
         confirm: Bool
     ) {
         guard let content, len > 0, let data = content.pointee.data else { return }
-        let str = String(cString: data)
+        var bytes = Data(bytes: data, count: len)
+        if bytes.last == 0 {
+            bytes.removeLast()
+        }
+        guard let str = String(data: bytes, encoding: .utf8) else {
+            kLog("[Ghostty] Clipboard write ignored: invalid UTF-8 payload len=\(len)")
+            return
+        }
         DispatchQueue.main.async {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(str, forType: .string)
@@ -372,11 +382,28 @@ final class KytosGhosttyApp {
         processAlive: Bool
     ) {
         DispatchQueue.main.async {
+            var userInfo: [String: Any] = ["processAlive": processAlive]
+            if let windowID = KytosAppModel.shared.windowID(for: NSApp.keyWindow) {
+                userInfo["windowID"] = windowID
+            }
             NotificationCenter.default.post(
                 name: NSNotification.Name("KytosGhosttyCloseSurface"),
                 object: nil,
-                userInfo: ["processAlive": processAlive]
+                userInfo: userInfo
             )
         }
+    }
+
+    @MainActor
+    private static func postWindowScopedNotification(
+        name: NSNotification.Name,
+        sourceView: KytosGhosttyView?,
+        userInfo: [String: Any] = [:]
+    ) {
+        var info = userInfo
+        if let windowID = KytosAppModel.shared.windowID(for: sourceView?.window) {
+            info["windowID"] = windowID
+        }
+        NotificationCenter.default.post(name: name, object: sourceView, userInfo: info.isEmpty ? nil : info)
     }
 }

@@ -28,7 +28,7 @@ All build operations use `pixi run <task>`. Run `pixi task list` to see all avai
 | `build` | Full build: ghostty + generate + xcodebuild (Debug) |
 | `build-if-needed` | Incremental build — skips if binary is up to date |
 | `run` | Build if needed + launch `Kytos.app` |
-| `test` | Run unit tests |
+| `test` | Run `Scripts/run-tests.sh` against the `Kytos-Tests` scheme |
 | `distclean` | Remove all build artifacts for a pristine rebuild |
 
 ### Release & Distribution
@@ -69,12 +69,14 @@ Sources/KytosApp/
   KytosSettings.swift             # Kytos-specific UI preferences
   KytosSettingsView.swift         # Settings window
   KytosPanelViews.swift           # Inspector panels
+  Splits/                         # Split tree model + recursive split views
   Ghostty/
     KytosGhosttyApp.swift         # ghostty_app_t wrapper, C callbacks
     KytosGhosttyView.swift        # ghostty_surface_t NSView, keyboard/mouse/IME
     KytosTerminalRepresentable.swift  # SwiftUI bridge (NSViewRepresentable)
-Sources/KytosWidget/              # macOS widget extension
+Sources/KytosWidget/              # macOS widget extension + shared widget snapshot model
 Sources/KytosTests/               # Unit tests
+Kytos.icon/                       # macOS .icon package compiled by actool
 ```
 
 ### Key Patterns
@@ -82,8 +84,8 @@ Sources/KytosTests/               # Unit tests
 - **`KytosGhosttyApp`** — `@Observable @MainActor` singleton wrapping `ghostty_app_t`. Owns config, runtime C callbacks (wakeup, action, clipboard, close), and the app tick loop.
 - **`KytosGhosttyView`** — `NSView` subclass wrapping `ghostty_surface_t`. Handles Metal layer, keyboard/mouse forwarding, and IME via `NSTextInputClient`.
 - **`KytosTerminalRepresentable`** — Thin `NSViewRepresentable` bridging `KytosGhosttyView` into SwiftUI.
-- **`KytosWorkspace`** — `@Observable` model holding a single `KytosSession` per window/tab.
-- **`KytosAppModel`** — Manages window-to-workspace mapping, persistence, and tab group restoration using native macOS window tabs.
+- **`KytosWorkspace`** — `@Observable` model holding a split tree of panes plus the currently focused pane for one native window/tab.
+- **`KytosAppModel`** — Manages window-to-workspace mapping, persistence, widget snapshots, and native macOS tab restoration.
 
 ### Shell Integration & Resource Detection
 
@@ -114,4 +116,3 @@ They are copied into the app bundle by the "Copy Ghostty Resources" pre-build sc
 1. **GhosttyKit** — Built from Ghostty source via `zig build` (arm64, ReleaseFast). Produces `Frameworks/GhosttyKit.xcframework` (static library, git-ignored).
 2. **XcodeGen** — `project.yml` defines targets, dependencies, and build settings. Generates `Kytos.xcodeproj` (git-ignored).
 3. **xcodebuild** — Compiles Swift 6 sources, links GhosttyKit + Carbon + KelyphosKit, produces `Kytos.app`.
-

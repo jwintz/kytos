@@ -100,6 +100,7 @@ targets:
       - path: Sources/KytosTests
     dependencies:
       - framework: Frameworks/GhosttyKit.xcframework
+        embed: false
     settings:
       PRODUCT_NAME: KytosTests
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.KytosTests
@@ -117,5 +118,9 @@ schemes:
     build:
       targets:
         Kytos-Tests: all
+    test:
+      config: Debug
+      targets:
+        - name: Kytos-Tests
     run:
       config: Debug

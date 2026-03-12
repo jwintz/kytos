@@ -148,6 +148,14 @@ private struct MediumWidgetView: View {
 private struct LargeWidgetView: View {
     let entry: KytosWidgetEntry
 
+    private var displayedWindows: [KytosWidgetWindow] {
+        Array(entry.snapshot.windows.prefix(4))
+    }
+
+    private var displayedProcessNodes: [KytosWidgetProcessNode] {
+        Array(entry.snapshot.processTree.prefix(12))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             // Header
@@ -169,13 +177,18 @@ private struct LargeWidgetView: View {
             if entry.snapshot.processTree.isEmpty {
                 // Fallback to window list if no process tree data
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(entry.snapshot.windows) { window in
+                    ForEach(displayedWindows) { window in
                         WindowRowView(window: window, showProcessList: true)
+                    }
+                    if entry.snapshot.windows.count > displayedWindows.count {
+                        Text("+\(entry.snapshot.windows.count - displayedWindows.count) more windows")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
                 }
             } else {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(entry.snapshot.processTree) { node in
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(displayedProcessNodes) { node in
                         HStack(spacing: 4) {
                             if node.depth > 0 {
                                 Color.clear.frame(width: CGFloat(node.depth) * 12)
@@ -189,6 +202,7 @@ private struct LargeWidgetView: View {
                             Text(node.command)
                                 .font(.system(size: 10, design: .monospaced))
                                 .lineLimit(1)
+                                .truncationMode(.middle)
                             Text(String(node.pid))
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundStyle(.tertiary)
@@ -202,16 +216,22 @@ private struct LargeWidgetView: View {
                         }
                         .padding(.vertical, 2)
                     }
+                    if entry.snapshot.processTree.count > displayedProcessNodes.count {
+                        Text("+\(entry.snapshot.processTree.count - displayedProcessNodes.count) more processes")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 2)
+                    }
                 }
             }
-
-            Spacer(minLength: 0)
 
             Text("Updated \(entry.snapshot.date, style: .relative) ago")
                 .font(.caption2)
                 .foregroundStyle(.quaternary)
         }
         .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

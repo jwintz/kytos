@@ -3,6 +3,7 @@
 /// Basic lifecycle tests for the Kytos app model.
 
 import Testing
+import Foundation
 
 @Suite("KytosAppModel")
 struct AppModelTests {

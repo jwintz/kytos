@@ -252,6 +252,24 @@ enum KytosProcessUtil {
         }
         return updates
     }
+
+    static func liveShellPIDs(for panes: [KytosPane], snapshot: [pid_t: PSEntry]) -> [pid_t] {
+        let shells = findShells(snapshot: snapshot)
+        var usedShells = Set<pid_t>()
+        var liveShellPIDs: [pid_t] = []
+
+        for pane in panes {
+            guard let shellPid = matchShell(for: pane, from: shells, excluding: usedShells) else {
+                kLog("[ProcessUtil] liveShellPIDs: no shell match for pane \(pane.id.uuidString.prefix(8)) pwd='\(pane.pwd)'")
+                continue
+            }
+            usedShells.insert(shellPid)
+            liveShellPIDs.append(shellPid)
+        }
+
+        kLog("[ProcessUtil] liveShellPIDs: panes=\(panes.count) matched=\(liveShellPIDs)")
+        return liveShellPIDs
+    }
 }
 
 // MARK: - Process Info View
@@ -446,6 +464,7 @@ struct KytosProcessInfoView: View {
     @MainActor private func refresh() async {
         let focusedPaneID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
         let focusedPane = workspace.splitTree.findPane(focusedPaneID) ?? workspace.splitTree.firstLeaf
+        let panes = workspace.splitTree.allPanes
         let ourPid = Foundation.ProcessInfo.processInfo.processIdentifier
 
         let result = await Task.detached { () -> ([ProcessEntry], SystemStats?, pid_t) in
@@ -453,9 +472,14 @@ struct KytosProcessInfoView: View {
             let shells = KytosProcessUtil.findShells(snapshot: snapshot)
             let matched = KytosProcessUtil.matchShell(for: focusedPane, from: shells, excluding: [])
             let resolvedShellPid = matched ?? shells.first?.shellPid ?? ourPid
+            let liveShellPIDs = KytosProcessUtil.liveShellPIDs(for: panes, snapshot: snapshot)
 
-            // Root tree at Kytos process to show full hierarchy
-            let tree = Self.processTree(rootPID: ourPid)
+            let tree = Self.processTree(
+                rootPID: ourPid,
+                liveShellPIDs: liveShellPIDs,
+                logLabel: "inspector",
+                includeFullTreeWhenNoLiveShells: false
+            )
             let stats = Self.systemStats()
             return (tree, stats, resolvedShellPid)
         }.value
@@ -465,7 +489,12 @@ struct KytosProcessInfoView: View {
         shellPid = result.2
     }
 
-    nonisolated static func processTree(rootPID: pid_t) -> [ProcessEntry] {
+    nonisolated static func processTree(
+        rootPID: pid_t,
+        liveShellPIDs: [pid_t] = [],
+        logLabel: String = "processTree",
+        includeFullTreeWhenNoLiveShells: Bool = true
+    ) -> [ProcessEntry] {
         let task = Process()
         let pipe = Pipe()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
@@ -492,11 +521,51 @@ struct KytosProcessInfoView: View {
             children[ppid, default: []].append(pid)
         }
 
+        let uniqueLiveShellPIDs = Array(Set(liveShellPIDs)).sorted()
+        let includedPIDs: Set<pid_t>? = {
+            guard !uniqueLiveShellPIDs.isEmpty else {
+                return includeFullTreeWhenNoLiveShells ? nil : [rootPID]
+            }
+
+            var included: Set<pid_t> = [rootPID]
+
+            func includeAncestors(of pid: pid_t) {
+                var current = pid
+                while let entry = all[current] {
+                    included.insert(current)
+                    if current == rootPID { return }
+                    current = entry.ppid
+                }
+            }
+
+            var visitedDescendants = Set<pid_t>()
+            func includeDescendants(of pid: pid_t) {
+                guard visitedDescendants.insert(pid).inserted else { return }
+                included.insert(pid)
+                for child in children[pid] ?? [] {
+                    includeDescendants(of: child)
+                }
+            }
+
+            for shellPID in uniqueLiveShellPIDs where all[shellPID] != nil {
+                includeAncestors(of: shellPID)
+                includeDescendants(of: shellPID)
+            }
+
+            return included
+        }()
+
+        kLog("[ProcessTree][\(logLabel)] root=\(rootPID) liveShells=\(uniqueLiveShellPIDs)")
+
         var result: [ProcessEntry] = []
         func walk(_ pid: pid_t, depth: Int) {
             guard var entry = all[pid] else { return }
+            if let includedPIDs, !includedPIDs.contains(pid) { return }
             // Skip zombie processes — they're already dead and awaiting reaping
-            guard !entry.stat.hasPrefix("Z") else { return }
+            guard !entry.stat.hasPrefix("Z") else {
+                kLog("[ProcessTree][\(logLabel)] skipping zombie pid=\(entry.pid) ppid=\(entry.ppid) stat=\(entry.stat) cmd=\(entry.command)")
+                return
+            }
             entry.depth = depth
             result.append(entry)
             for child in (children[pid] ?? []).sorted() {

@@ -97,7 +97,9 @@ public final class KytosAppModel {
 
     private func startWidgetRefreshTimer() {
         widgetRefreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            self?.writeWidgetSnapshot()
+            Task { @MainActor [weak self] in
+                self?.writeWidgetSnapshot()
+            }
         }
     }
 
@@ -115,6 +117,15 @@ public final class KytosAppModel {
 
     public func registerWindow(_ window: NSWindow, for id: UUID) {
         windowToID[ObjectIdentifier(window)] = id
+    }
+
+    public func windowID(for window: NSWindow?) -> UUID? {
+        guard let window else { return nil }
+        return windowToID[ObjectIdentifier(window)]
+    }
+
+    public func window(for id: UUID) -> NSWindow? {
+        NSApp.windows.first { windowToID[ObjectIdentifier($0)] == id }
     }
 
     public func workspace(for windowID: UUID) -> KytosWorkspace {
@@ -176,7 +187,15 @@ public final class KytosAppModel {
 
         // Build process tree for large widget
         let ourPid = ProcessInfo.processInfo.processIdentifier
-        let rawTree = KytosProcessInfoView.processTree(rootPID: ourPid)
+        let panes = windows.values.flatMap { $0.splitTree.allPanes }
+        let psSnapshot = KytosProcessUtil.psSnapshot()
+        let liveShellPIDs = KytosProcessUtil.liveShellPIDs(for: panes, snapshot: psSnapshot)
+        let rawTree = KytosProcessInfoView.processTree(
+            rootPID: ourPid,
+            liveShellPIDs: liveShellPIDs,
+            logLabel: "widget",
+            includeFullTreeWhenNoLiveShells: false
+        )
         let processTree = rawTree.enumerated().map { idx, entry in
             KytosWidgetProcessNode(
                 pid: entry.pid,
