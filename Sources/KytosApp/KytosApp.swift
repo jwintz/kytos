@@ -513,30 +513,28 @@ struct KytosWindowView: View {
         .environment(workspace)
         .focusedSceneValue(\.kytosFocusedWindowID, stableID)
         .background { WindowRegistrar(windowID: stableID) }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttySetTitle"))) { _ in
+            // SET_TITLE fires on preexec (command launch) and precmd (prompt return)
+            refreshProcessNames(workspace: workspace)
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyPwd"))) { notif in
-            guard let sourceView = notif.object as? KytosGhosttyView,
-                  let paneID = sourceView.paneID else { return }
-            let focusedID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
-            guard paneID == focusedID else { return }
-            let pwd = notif.userInfo?["pwd"] as? String ?? ""
-            windowShellState.subtitle = pwd.isEmpty ? "" : abbreviatePath(pwd)
+            if let sourceView = notif.object as? KytosGhosttyView,
+               let paneID = sourceView.paneID {
+                let focusedID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
+                if paneID == focusedID {
+                    let pwd = notif.userInfo?["pwd"] as? String ?? ""
+                    windowShellState.subtitle = pwd.isEmpty ? "" : abbreviatePath(pwd)
+                }
+            }
+            refreshProcessNames(workspace: workspace)
         }
         .onChange(of: workspace.focusedPaneID) { _, _ in
-            updateToolbar(workspace: workspace)
+            refreshProcessNames(workspace: workspace)
         }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
-                let panes = workspace.splitTree.allPanes
-                kLog("[ProcessPoll] tick, \(panes.count) panes")
-                let updates = await Task.detached {
-                    KytosProcessUtil.detectProcessNames(for: panes)
-                }.value
-                kLog("[ProcessPoll] got \(updates.count) updates: \(updates.map { "\($0.0.uuidString.prefix(4))=\($0.1)" })")
-                for (id, name) in updates {
-                    workspace.splitTree.updateProcessName(name, for: id)
-                }
-                updateToolbar(workspace: workspace)
+                refreshProcessNames(workspace: workspace)
             }
         }
         .onChange(of: windowShellState.navigatorVisible) { _, _ in
@@ -547,6 +545,24 @@ struct KytosWindowView: View {
         }
         .onChange(of: windowShellState.utilityAreaVisible) { _, _ in
             windowShellState.savePanelState()
+        }
+    }
+
+    private func refreshProcessNames(workspace: KytosWorkspace) {
+        let panes = workspace.splitTree.allPanes
+        Task {
+            let updates = await Task.detached {
+                KytosProcessUtil.detectProcessNames(for: panes)
+            }.value
+            for (id, name) in updates {
+                workspace.splitTree.updateProcessName(name, for: id)
+            }
+            updateToolbar(workspace: workspace)
+            // Notify inspector to refresh too
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KytosProcessNamesUpdated"),
+                object: nil
+            )
         }
     }
 

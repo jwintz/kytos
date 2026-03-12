@@ -300,6 +300,10 @@ struct KytosProcessInfoView: View {
             guard isVisible else { return }
             Task { await refresh() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosProcessNamesUpdated"))) { _ in
+            guard isVisible else { return }
+            Task { await refresh() }
+        }
     }
 
     private var sessionHeader: some View {
