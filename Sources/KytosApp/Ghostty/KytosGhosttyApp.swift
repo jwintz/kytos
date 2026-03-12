@@ -362,15 +362,22 @@ final class KytosGhosttyApp {
         len: Int,
         confirm: Bool
     ) {
-        guard let content, len > 0, let data = content.pointee.data else { return }
-        var bytes = Data(bytes: data, count: len)
-        if bytes.last == 0 {
-            bytes.removeLast()
-        }
-        guard let str = String(data: bytes, encoding: .utf8) else {
-            kLog("[Ghostty] Clipboard write ignored: invalid UTF-8 payload len=\(len)")
+        guard let content, len > 0 else { return }
+
+        let entries = UnsafeBufferPointer(start: content, count: len)
+        let preferredEntry = entries.first {
+            guard let mime = $0.mime else { return false }
+            let mimeString = String(cString: mime)
+            return mimeString == "text/plain;charset=utf-8" || mimeString == "text/plain" || mimeString == "public.utf8-plain-text"
+        } ?? entries.first
+
+        guard let selectedEntry = preferredEntry,
+              let data = selectedEntry.data else {
+            kLog("[Ghostty] Clipboard write ignored: no usable clipboard entry count=\(len)")
             return
         }
+
+        let str = String(cString: data)
         DispatchQueue.main.async {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(str, forType: .string)
