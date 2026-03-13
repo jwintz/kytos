@@ -385,6 +385,12 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
 
         // Let Kytos-owned shortcuts propagate to menu bar / SwiftUI responder chain
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+        // Ctrl+Tab / Ctrl+Shift+Tab → native macOS tab switching
+        if event.keyCode == 48 /* Tab */ && flags.contains(.control) {
+            return false
+        }
+
         if flags == .command {
             switch event.keyCode {
             case 12: return false  // Cmd+Q → app quit
