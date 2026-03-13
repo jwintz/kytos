@@ -157,77 +157,73 @@ private struct LargeWidgetView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            // Footer pinned to bottom
+        VStack(alignment: .leading, spacing: 6) {
+            // Header
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color.primary.opacity(0.6))
+                    .frame(width: 7, height: 7)
+                Text("Kytos")
+                    .font(.system(size: 11, weight: .medium))
+                Spacer()
+                Text("\(entry.snapshot.windows.count)W · \(entry.snapshot.totalTerminals)T")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            // Process tree
+            if entry.snapshot.processTree.isEmpty {
+                ForEach(displayedWindows) { window in
+                    WindowRowView(window: window, showProcessList: true)
+                }
+                if entry.snapshot.windows.count > displayedWindows.count {
+                    Text("+\(entry.snapshot.windows.count - displayedWindows.count) more windows")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            } else {
+                ForEach(displayedProcessNodes) { node in
+                    HStack(spacing: 4) {
+                        if node.depth > 0 {
+                            Color.clear.frame(width: CGFloat(node.depth) * 12)
+                            Image(systemName: "arrow.turn.down.right")
+                                .font(.system(size: 7))
+                                .foregroundStyle(.quaternary)
+                        }
+                        Circle()
+                            .fill(node.isDeepest ? Color.accentColor : Color.secondary.opacity(0.6))
+                            .frame(width: 5, height: 5)
+                        Text(node.command)
+                            .font(.system(size: 10, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(String(node.pid))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                        Spacer()
+                        Text(String(format: "%.0f MB", node.rssMB))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Text(node.cpu)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                if entry.snapshot.processTree.count > displayedProcessNodes.count {
+                    Text("+\(entry.snapshot.processTree.count - displayedProcessNodes.count) more")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            // Footer
             Text("Updated \(entry.snapshot.date, style: .relative) ago")
                 .font(.caption2)
                 .foregroundStyle(.quaternary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-
-            // Content pinned to top — fixedSize prevents vertical stretching
-            VStack(alignment: .leading, spacing: 6) {
-                // Header
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(Color.primary.opacity(0.6))
-                        .frame(width: 7, height: 7)
-                    Text("Kytos")
-                        .font(.system(size: 11, weight: .medium))
-                    Spacer()
-                    Text("\(entry.snapshot.windows.count)W · \(entry.snapshot.totalTerminals)T")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-
-                Divider()
-
-                // Process tree
-                if entry.snapshot.processTree.isEmpty {
-                    ForEach(displayedWindows) { window in
-                        WindowRowView(window: window, showProcessList: true)
-                    }
-                    if entry.snapshot.windows.count > displayedWindows.count {
-                        Text("+\(entry.snapshot.windows.count - displayedWindows.count) more windows")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                } else {
-                    ForEach(displayedProcessNodes) { node in
-                        HStack(spacing: 4) {
-                            if node.depth > 0 {
-                                Color.clear.frame(width: CGFloat(node.depth) * 12)
-                                Image(systemName: "arrow.turn.down.right")
-                                    .font(.system(size: 7))
-                                    .foregroundStyle(.quaternary)
-                            }
-                            Circle()
-                                .fill(node.isDeepest ? Color.accentColor : Color.secondary.opacity(0.6))
-                                .frame(width: 5, height: 5)
-                            Text(node.command)
-                                .font(.system(size: 10, design: .monospaced))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Text(String(node.pid))
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                            Spacer()
-                            Text(String(format: "%.0f MB", node.rssMB))
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                            Text(node.cpu)
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    if entry.snapshot.processTree.count > displayedProcessNodes.count {
-                        Text("+\(entry.snapshot.processTree.count - displayedProcessNodes.count) more")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
