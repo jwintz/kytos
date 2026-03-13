@@ -153,30 +153,36 @@ private struct LargeWidgetView: View {
     }
 
     private var displayedProcessNodes: [KytosWidgetProcessNode] {
-        Array(entry.snapshot.processTree.prefix(12))
+        Array(entry.snapshot.processTree.prefix(8))
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Header
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(Color.primary.opacity(0.6))
-                    .frame(width: 7, height: 7)
-                Text("Kytos")
-                    .font(.system(size: 11, weight: .medium))
-                Spacer()
-                Text("\(entry.snapshot.windows.count)W · \(entry.snapshot.totalTerminals)T")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
+        ZStack(alignment: .bottomLeading) {
+            // Footer pinned to bottom
+            Text("Updated \(entry.snapshot.date, style: .relative) ago")
+                .font(.caption2)
+                .foregroundStyle(.quaternary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
 
-            Divider()
+            // Content pinned to top — fixedSize prevents vertical stretching
+            VStack(alignment: .leading, spacing: 6) {
+                // Header
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.primary.opacity(0.6))
+                        .frame(width: 7, height: 7)
+                    Text("Kytos")
+                        .font(.system(size: 11, weight: .medium))
+                    Spacer()
+                    Text("\(entry.snapshot.windows.count)W · \(entry.snapshot.totalTerminals)T")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
 
-            // Process tree
-            if entry.snapshot.processTree.isEmpty {
-                // Fallback to window list if no process tree data
-                VStack(alignment: .leading, spacing: 8) {
+                Divider()
+
+                // Process tree
+                if entry.snapshot.processTree.isEmpty {
                     ForEach(displayedWindows) { window in
                         WindowRowView(window: window, showProcessList: true)
                     }
@@ -185,9 +191,7 @@ private struct LargeWidgetView: View {
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 3) {
+                } else {
                     ForEach(displayedProcessNodes) { node in
                         HStack(spacing: 4) {
                             if node.depth > 0 {
@@ -214,24 +218,19 @@ private struct LargeWidgetView: View {
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundStyle(.tertiary)
                         }
-                        .padding(.vertical, 2)
                     }
                     if entry.snapshot.processTree.count > displayedProcessNodes.count {
-                        Text("+\(entry.snapshot.processTree.count - displayedProcessNodes.count) more processes")
+                        Text("+\(entry.snapshot.processTree.count - displayedProcessNodes.count) more")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
-                            .padding(.top, 2)
                     }
                 }
             }
-
-            Text("Updated \(entry.snapshot.date, style: .relative) ago")
-                .font(.caption2)
-                .foregroundStyle(.quaternary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

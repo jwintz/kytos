@@ -40,23 +40,6 @@ targets:
           cp -R "${SRCROOT}/Resources/ghostty/shell-integration" "$RESOURCES_DIR/ghostty/"
           cp -R "${SRCROOT}/Resources/terminfo" "$RESOURCES_DIR/"
     postBuildScripts:
-      - name: Stamp bundle versions
-        basedOnDependencyAnalysis: false
-        script: |
-          APP_PATH="${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app"
-          APP_PLIST="$APP_PATH/Contents/Info.plist"
-          WIDGET_PLIST="$APP_PATH/Contents/PlugIns/KytosWidget.appex/Contents/Info.plist"
-          BUILD_VERSION="${CURRENT_PROJECT_VERSION:-1}"
-          SHORT_VERSION="${MARKETING_VERSION:-1.0}"
-          PLIST_BUDDY="/usr/libexec/PlistBuddy"
-          if [ -f "$APP_PLIST" ]; then
-            "$PLIST_BUDDY" -c "Set :CFBundleVersion $BUILD_VERSION" "$APP_PLIST" || true
-            "$PLIST_BUDDY" -c "Set :CFBundleShortVersionString $SHORT_VERSION" "$APP_PLIST" || true
-          fi
-          if [ -f "$WIDGET_PLIST" ]; then
-            "$PLIST_BUDDY" -c "Set :CFBundleVersion $BUILD_VERSION" "$WIDGET_PLIST" || true
-            "$PLIST_BUDDY" -c "Set :CFBundleShortVersionString $SHORT_VERSION" "$WIDGET_PLIST" || true
-          fi
       - name: Register widget
         basedOnDependencyAnalysis: false
         script: |
@@ -80,10 +63,6 @@ targets:
             UTTypeDescription: Kytos Pane ID
             UTTypeIdentifier: me.jwintz.kytos.pane-id
             UTTypeTagSpecification: {}
-    attributes:
-      SystemCapabilities:
-        com.apple.ApplicationGroups.Mac:
-          enabled: 1
     settings:
       PRODUCT_NAME: Kytos
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos
