@@ -4,6 +4,9 @@
 import SwiftUI
 import WidgetKit
 
+/// Bump this number each build to verify widget recompilation.
+private let kWidgetBuildNumber = 7
+
 // MARK: - Timeline Provider
 
 struct KytosTimelineProvider: TimelineProvider {
@@ -97,49 +100,110 @@ private struct SmallWidgetView: View {
     }
 }
 
-// MARK: - Medium (up to 3 windows + top process)
+// MARK: - Medium (left branding + right navigator pane grid)
 
 private struct MediumWidgetView: View {
     let entry: KytosWidgetEntry
 
-    private var displayWindows: [KytosWidgetWindow] {
-        Array(entry.snapshot.windows.prefix(3))
+    private var displayPanes: [KytosWidgetPane] {
+        Array(entry.snapshot.panes.prefix(3))
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
+        HStack(spacing: 0) {
+            // Left column — branding + counts
             VStack(alignment: .leading, spacing: 6) {
                 Image(systemName: "terminal")
                     .font(.title2)
                     .foregroundStyle(.secondary)
                 Text("Kytos")
                     .font(.headline)
-                Spacer()
-                Text("\(entry.snapshot.totalTerminals) terminal\(entry.snapshot.totalTerminals == 1 ? "" : "s")")
+                Text("b\(kWidgetBuildNumber)")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.red)
+                Spacer(minLength: 0)
+                Text("\(entry.snapshot.panes.count) pane\(entry.snapshot.panes.count == 1 ? "" : "s")")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text("\(entry.snapshot.windows.count) window\(entry.snapshot.windows.count == 1 ? "" : "s")")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
-            .frame(maxWidth: 90, alignment: .leading)
+            .frame(width: 80, alignment: .leading)
 
-            Divider()
+            Divider().padding(.horizontal, 6)
 
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(displayWindows) { window in
-                    WindowRowView(window: window, showProcessList: false)
+            // Right column — pane grid
+            Grid(alignment: .leading, verticalSpacing: 4) {
+                if displayPanes.isEmpty {
+                    ForEach(Array(entry.snapshot.windows.prefix(3))) { window in
+                        GridRow {
+                            WindowRowView(window: window, showProcessList: false)
+                        }
+                    }
+                } else {
+                    ForEach(displayPanes) { pane in
+                        GridRow {
+                            WidgetPaneRowView(pane: pane, isSplit: entry.snapshot.panes.count > 1)
+                        }
+                    }
+                    if entry.snapshot.panes.count > displayPanes.count {
+                        GridRow {
+                            Text("+\(entry.snapshot.panes.count - displayPanes.count) more")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
                 }
-                if entry.snapshot.windows.count > 3 {
-                    Text("+\(entry.snapshot.windows.count - 3) more")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                Spacer(minLength: 0)
+                // Spacer row absorbs remaining height
+                GridRow { Color.clear }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+    }
+}
+
+/// Navigator-style pane row for medium widget.
+private struct WidgetPaneRowView: View {
+    let pane: KytosWidgetPane
+    let isSplit: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // Focus indicator
+            Circle()
+                .fill(pane.isFocused ? Color.accentColor : Color.clear)
+                .frame(width: 6, height: 6)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pane.processName)
+                    .font(.system(size: 11, weight: pane.isFocused ? .medium : .regular))
+                    .lineLimit(1)
+
+                if !pane.path.isEmpty {
+                    Text(pane.path)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            // Position indicator (SF Symbol composition)
+            if isSplit, !pane.positionSymbols.isEmpty {
+                HStack(spacing: 1) {
+                    ForEach(Array(pane.positionSymbols.enumerated()), id: \.offset) { _, symbol in
+                        Image(systemName: symbol)
+                            .font(.system(size: 8))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -156,77 +220,88 @@ private struct LargeWidgetView: View {
         Array(entry.snapshot.processTree.prefix(8))
     }
 
+    @ViewBuilder
+    private var processRows: some View {
+        if entry.snapshot.processTree.isEmpty {
+            ForEach(displayedWindows) { window in
+                WindowRowView(window: window, showProcessList: true)
+            }
+            if entry.snapshot.windows.count > displayedWindows.count {
+                Text("+\(entry.snapshot.windows.count - displayedWindows.count) more windows")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        } else {
+            ForEach(displayedProcessNodes) { node in
+                HStack(spacing: 4) {
+                    if node.depth > 0 {
+                        Color.clear.frame(width: CGFloat(node.depth) * 12)
+                        Image(systemName: "arrow.turn.down.right")
+                            .font(.system(size: 7))
+                            .foregroundStyle(.quaternary)
+                    }
+                    Circle()
+                        .fill(node.isDeepest ? Color.accentColor : Color.secondary.opacity(0.6))
+                        .frame(width: 5, height: 5)
+                    Text(node.command)
+                        .font(.system(size: 10, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(String(node.pid))
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                    Spacer(minLength: 0)
+                    Text(String(format: "%.0f MB", node.rssMB))
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Text(node.cpu)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            if entry.snapshot.processTree.count > displayedProcessNodes.count {
+                Text("+\(entry.snapshot.processTree.count - displayedProcessNodes.count) more")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header + content pinned to top
-            VStack(alignment: .leading, spacing: 6) {
+        Grid(alignment: .leading, verticalSpacing: 4) {
+            // Header
+            GridRow {
                 HStack(spacing: 6) {
                     Circle()
                         .fill(Color.primary.opacity(0.6))
                         .frame(width: 7, height: 7)
                     Text("Kytos")
                         .font(.system(size: 11, weight: .medium))
+                    Text("b\(kWidgetBuildNumber)")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.red)
                     Spacer()
                     Text("\(entry.snapshot.windows.count)W · \(entry.snapshot.totalTerminals)T")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
-
-                Divider()
-
-                // Process tree
-                if entry.snapshot.processTree.isEmpty {
-                    ForEach(displayedWindows) { window in
-                        WindowRowView(window: window, showProcessList: true)
-                    }
-                    if entry.snapshot.windows.count > displayedWindows.count {
-                        Text("+\(entry.snapshot.windows.count - displayedWindows.count) more windows")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                } else {
-                    ForEach(displayedProcessNodes) { node in
-                        HStack(spacing: 4) {
-                            if node.depth > 0 {
-                                Color.clear.frame(width: CGFloat(node.depth) * 12)
-                                Image(systemName: "arrow.turn.down.right")
-                                    .font(.system(size: 7))
-                                    .foregroundStyle(.quaternary)
-                            }
-                            Circle()
-                                .fill(node.isDeepest ? Color.accentColor : Color.secondary.opacity(0.6))
-                                .frame(width: 5, height: 5)
-                            Text(node.command)
-                                .font(.system(size: 10, design: .monospaced))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Text(String(node.pid))
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                            Spacer()
-                            Text(String(format: "%.0f MB", node.rssMB))
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                            Text(node.cpu)
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    if entry.snapshot.processTree.count > displayedProcessNodes.count {
-                        Text("+\(entry.snapshot.processTree.count - displayedProcessNodes.count) more")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
             }
-            .fixedSize(horizontal: false, vertical: true)
 
-            Spacer(minLength: 0)
+            GridRow { Divider() }
 
-            // Footer pinned to bottom
-            Text("Updated \(entry.snapshot.date, style: .relative) ago")
-                .font(.caption2)
-                .foregroundStyle(.quaternary)
+            // Process rows — each in its own GridRow
+            processRows
+
+            // Spacer row absorbs remaining height
+            GridRow { Color.clear }
+
+            // Footer
+            GridRow {
+                Text("Updated \(entry.snapshot.date, style: .relative) ago")
+                    .font(.caption2)
+                    .foregroundStyle(.quaternary)
+            }
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)

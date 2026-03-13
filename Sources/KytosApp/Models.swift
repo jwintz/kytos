@@ -185,11 +185,33 @@ public final class KytosAppModel {
     }
 
     private func writeWidgetSnapshot() {
+        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+
         let windowList = windows.values.map { workspace -> KytosWidgetWindow in
             let terminals = workspace.splitTree.allPanes.map { pane in
                 KytosWidgetTerminal(id: pane.id, process: pane.processName.isEmpty ? "shell" : pane.processName)
             }
             return KytosWidgetWindow(id: workspace.session.id, name: workspace.session.name, terminals: terminals)
+        }
+
+        // Build navigator-style pane list for medium widget
+        let widgetPanes: [KytosWidgetPane] = windows.values.flatMap { workspace -> [KytosWidgetPane] in
+            let focusedID = workspace.focusedPaneID
+            return workspace.splitTree.allPanes.map { pane in
+                let steps = workspace.splitTree.positionSteps(for: pane.id) ?? []
+                let symbols = steps.map(\.sfSymbol)
+                var path = pane.pwd
+                if path.hasPrefix(homePath) {
+                    path = "~" + path.dropFirst(homePath.count)
+                }
+                return KytosWidgetPane(
+                    id: pane.id,
+                    processName: pane.processName.isEmpty ? "shell" : pane.processName,
+                    path: path,
+                    positionSymbols: symbols,
+                    isFocused: pane.id == focusedID
+                )
+            }
         }
 
         // Build process tree for large widget
@@ -218,7 +240,8 @@ public final class KytosAppModel {
             date: .now,
             version: UInt64(Date().timeIntervalSince1970 * 1000),
             windows: windowList,
-            processTree: processTree
+            processTree: processTree,
+            panes: widgetPanes
         )
         KytosWidgetSnapshot.write(snapshot)
         WidgetCenter.shared.reloadAllTimelines()

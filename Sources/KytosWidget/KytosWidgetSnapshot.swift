@@ -41,24 +41,46 @@ public struct KytosWidgetProcessNode: Codable, Identifiable {
     }
 }
 
+/// A pane entry for navigator-style widget display.
+public struct KytosWidgetPane: Codable, Identifiable {
+    public let id: UUID
+    public let processName: String
+    public let path: String
+    /// SF Symbol names representing position in split tree (e.g. "rectangle.lefthalf.filled").
+    public let positionSymbols: [String]
+    public let isFocused: Bool
+
+    public init(id: UUID, processName: String, path: String, positionSymbols: [String], isFocused: Bool) {
+        self.id = id
+        self.processName = processName
+        self.path = path
+        self.positionSymbols = positionSymbols
+        self.isFocused = isFocused
+    }
+}
+
 public struct KytosWidgetSnapshot: Codable {
     public let date: Date
     public let version: UInt64
     public let windows: [KytosWidgetWindow]
     /// Flattened process tree for large widget display.
     public let processTree: [KytosWidgetProcessNode]
+    /// Navigator-style pane list for medium widget display.
+    public let panes: [KytosWidgetPane]
     public var totalTerminals: Int { windows.reduce(0) { $0 + $1.terminalCount } }
 
     public init(
         date: Date,
         version: UInt64 = 0,
         windows: [KytosWidgetWindow],
-        processTree: [KytosWidgetProcessNode] = []
+        processTree: [KytosWidgetProcessNode] = [],
+        panes: [KytosWidgetPane] = []
     ) {
         self.date = date
         self.version = version
         self.windows = windows
         self.processTree = processTree
+        self.panes = panes
     }
 
     public init(from decoder: Decoder) throws {
@@ -67,6 +89,7 @@ public struct KytosWidgetSnapshot: Codable {
         version = try c.decodeIfPresent(UInt64.self, forKey: .version) ?? 0
         windows = try c.decode([KytosWidgetWindow].self, forKey: .windows)
         processTree = try c.decodeIfPresent([KytosWidgetProcessNode].self, forKey: .processTree) ?? []
+        panes = try c.decodeIfPresent([KytosWidgetPane].self, forKey: .panes) ?? []
     }
 
     private static var isAppExtension: Bool {
@@ -139,6 +162,10 @@ public struct KytosWidgetSnapshot: Codable {
                 KytosWidgetProcessNode(pid: 1001, command: "login", depth: 1, rssMB: 1, cpu: "0.0%", isDeepest: false),
                 KytosWidgetProcessNode(pid: 1002, command: "zsh", depth: 2, rssMB: 8, cpu: "0.0%", isDeepest: false),
                 KytosWidgetProcessNode(pid: 1003, command: "vim", depth: 3, rssMB: 12, cpu: "0.2%", isDeepest: true),
+            ],
+            panes: [
+                KytosWidgetPane(id: UUID(), processName: "vim", path: "~/Projects/kytos", positionSymbols: ["rectangle.lefthalf.filled"], isFocused: true),
+                KytosWidgetPane(id: UUID(), processName: "zsh", path: "~/Projects/kytos", positionSymbols: ["rectangle.righthalf.filled"], isFocused: false),
             ]
         )
     }

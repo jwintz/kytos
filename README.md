@@ -122,6 +122,13 @@ For development builds, the post-build "Register widget" script calls `pluginkit
 
 If macOS still shows stale widget UI after a rebuild, remove and re-add the widget from the desktop gallery.
 
+## Widget Development
+
+Force-reload widget after rebuild (kills cached process and re-registers extension):
+```bash
+killall KytosWidget 2>/dev/null; pluginkit -e use -i me.jwintz.Kytos.KytosWidget
+```
+
 ### Shell Integration & Resource Detection
 
 Ghostty's shell integration injects OSC escape sequences into bash/zsh/fish/elvish/nushell so the terminal receives live updates: OSC 0/2 for the process title, OSC 7 for the working directory. These drive the dynamic toolbar title/subtitle and navigator pane labels.
