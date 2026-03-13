@@ -3,6 +3,10 @@
 
 import Foundation
 
+private func widgetSnapshotLog(_ message: @autoclosure () -> String) {
+    fputs("[WidgetSnapshot] \(message())\n", stderr)
+}
+
 public struct KytosWidgetTerminal: Codable, Identifiable {
     public let id: UUID
     public let process: String
@@ -65,38 +69,55 @@ public struct KytosWidgetSnapshot: Codable {
         processTree = try c.decodeIfPresent([KytosWidgetProcessNode].self, forKey: .processTree) ?? []
     }
 
-    private static let widgetBundleID = "me.jwintz.Kytos.KytosWidget"
-    private static let appGroupID = "group.me.jwintz.Kytos"
-
-    /// Shared URL for widget snapshot data.
-    /// The unsandboxed main app writes directly into the widget's container.
-    /// The sandboxed widget reads from its own Application Support.
-    private static var sharedURL: URL {
-        let dir: URL
-        dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Kytos", isDirectory: true)
-        return dir.appendingPathComponent("widget-snapshot.json")
+    private static var isAppExtension: Bool {
+        Bundle.main.bundleURL.pathExtension == "appex"
     }
 
-    /// URL used by the main app (unsandboxed on macOS) to write widget data.
-    public static var appWriteURL: URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let dir = home
-            .appendingPathComponent("Library/Containers/\(widgetBundleID)/Data/Library/Application Support/Kytos", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    private static var snapshotURL: URL? {
+        // The widget is sandboxed; it reads from its own container's Application Support.
+        // The main app is NOT sandboxed, so it writes directly into the widget's container
+        // using the same resolved path. This avoids needing App Group provisioning.
+        let dir: URL
+        if isAppExtension {
+            // Widget: read from own Application Support (sandbox-relative)
+            guard let appSupport = FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first else {
+                widgetSnapshotLog("Missing widget Application Support directory")
+                return nil
+            }
+            dir = appSupport.appendingPathComponent("Kytos", isDirectory: true)
+        } else {
+            // Main app (non-sandboxed): write into the widget's container directly
+            let widgetContainer = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Containers/me.jwintz.Kytos.KytosWidget/Data/Library/Application Support/Kytos", isDirectory: true)
+            dir = widgetContainer
+        }
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            widgetSnapshotLog("Failed to create snapshot dir: \(error)")
+            return nil
+        }
         return dir.appendingPathComponent("widget-snapshot.json")
     }
 
     public static func read() -> KytosWidgetSnapshot? {
-        guard let data = try? Data(contentsOf: sharedURL),
+        guard let snapshotURL,
+              let data = try? Data(contentsOf: snapshotURL),
               let snapshot = try? JSONDecoder().decode(KytosWidgetSnapshot.self, from: data)
         else { return nil }
         return snapshot
     }
 
     public static func write(_ snapshot: KytosWidgetSnapshot) {
-        if let data = try? JSONEncoder().encode(snapshot) {
-            try? data.write(to: appWriteURL, options: .atomic)
+        guard let snapshotURL else { return }
+        do {
+            let data = try JSONEncoder().encode(snapshot)
+            try data.write(to: snapshotURL, options: .atomic)
+        } catch {
+            widgetSnapshotLog("Failed to write snapshot: \(error)")
         }
     }
 

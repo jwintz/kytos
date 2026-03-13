@@ -91,24 +91,32 @@ Kytos.icon/                       # macOS .icon package compiled by actool
 
 Kytos uses a single SwiftUI `WindowGroup`, so native macOS windows and native tabs are both backed by `KytosWorkspace` values in `KytosAppModel.windows`.
 
-At shutdown, Kytos persists two pieces of state:
+At shutdown, Kytos persists the workspace map itself (`KytosAppModel_Windows_v7`). Each `WindowGroup(for: UUID.self)` scene also gets its bound UUID restored by SwiftUI/AppKit state restoration.
 
-- the workspace map itself (`KytosAppModel_Windows_v7`)
-- a separate list of native tab groups (`KytosAppModel_TabGroups_v1`)
+On relaunch, Kytos now relies on native macOS restoration instead of replaying saved tab groups itself:
 
-On relaunch, each saved workspace is reopened first, then grouped back into native tabs as soon as the corresponding `NSWindow`s have actually been registered. This avoids the old fixed-delay race where a saved tab group could briefly relaunch as separate windows.
+- `KytosAppDelegate` opts into secure restoration with `applicationSupportsSecureRestorableState`
+- each live `NSWindow` is marked restorable by `WindowRegistrar`
+- SwiftUI restores the `UUID` presentation value for each `WindowGroup` scene, and AppKit restores native tab membership for those windows
 
 When debugging restoration, remember that:
 
-- a native tab is still just another `NSWindow` instance until AppKit groups it
-- `WindowRegistrar` is the source of truth for when a restored window is real enough to be tabbed
-- closing a tab group saves both the individual workspaces and the group membership, so restoring one without the other produces the wrong shape
+- a native tab is still just another `NSWindow` instance managed by AppKit
+- the workspace UUID is the durable key that reconnects a restored window to `KytosAppModel.windows`
+- Kytos still manually tabs *new* runtime windows for `⌘T`, but relaunch restoration is now AppKit-native instead of custom regrouping
 
 ### Widget Refresh Behavior
 
 Kytos writes a JSON snapshot for the widget and immediately calls `WidgetCenter.shared.reloadAllTimelines()`, but WidgetKit still caches aggressively on macOS.
 
-For development builds, `pixi run build` and `pixi run run` now re-register the widget extension with `pluginkit -r` followed by `pluginkit -a`, which helps already-pinned desktop widgets pick up a rebuilt extension. If WidgetKit still shows stale UI after a rebuild, remove and re-add the widget from the desktop gallery.
+The app and widget share that snapshot through the App Group container `group.me.jwintz.Kytos`, so both targets must keep the App Group entitlement in sync.
+
+For development builds, `pixi run build` and `pixi run run` now:
+
+- stamp a fresh `CFBundleVersion` into the app and widget bundle
+- re-register the widget extension with `pluginkit -r` followed by `pluginkit -a`
+
+That gives WidgetKit a much better chance of loading the rebuilt extension. If macOS still shows stale UI after a rebuild, remove and re-add the widget from the desktop gallery.
 
 ### Shell Integration & Resource Detection
 

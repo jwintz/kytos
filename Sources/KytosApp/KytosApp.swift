@@ -339,8 +339,16 @@ func kLog(_ msg: @autoclosure () -> String) {}
 
 import GhosttyKit
 
+@MainActor
+final class KytosAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        true
+    }
+}
+
 @main
 struct KytosApp: App {
+    @NSApplicationDelegateAdaptor(KytosAppDelegate.self) private var appDelegate
     @Environment(\.kelyphosKeybindingRegistry) private var registry
     @State private var appModel = KytosAppModel.shared
     @State private var settingsShellState: KelyphosShellState = {
@@ -535,17 +543,18 @@ struct KytosWindowView: View {
                 appModel.save()
             }
 
-            // Restore unclaimed windows
+            // Let AppKit/SwiftUI restore whatever native tabs/windows it can first,
+            // then reopen only the saved workspaces that never came back.
             if !appModel.hasRestoredWindows {
                 appModel.hasRestoredWindows = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     let unclaimed = appModel.windows.filter { !appModel.isWindowClaimed($0.key) }
                     appModel.preparePendingTabRestoration(appModel.loadTabGroups())
                     for (savedID, _) in unclaimed {
                         openWindow(id: "main", value: savedID)
                     }
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
                     appModel.pruneOrphanedWorkspaces()
                 }
             }
@@ -734,6 +743,10 @@ private struct WindowRegistrar: NSViewRepresentable {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             guard let window else { return }
+            window.isRestorable = true
+            window.identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
+            window.setFrameAutosaveName("KytosWindow-\(windowID.uuidString)")
+            window.tabbingIdentifier = "me.jwintz.Kytos.main"
             KytosAppModel.shared.registerWindow(window, for: windowID)
         }
     }

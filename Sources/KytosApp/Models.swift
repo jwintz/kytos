@@ -105,7 +105,9 @@ public final class KytosAppModel {
 
     /// Set of windowIDs that have been claimed by live windows in this session.
     @ObservationIgnored private var claimedWindowIDs: Set<UUID> = []
+    @ObservationIgnored private var restoredWindowIDRemap: [UUID: UUID] = [:]
     @ObservationIgnored private var pendingTabGroups: [[UUID]] = []
+    @ObservationIgnored private var tabRestorationRetryScheduled = false
     @ObservationIgnored public var hasRestoredWindows = false
 
     /// Set by the willTerminate handler to prevent NSWindow.willClose from
@@ -118,6 +120,7 @@ public final class KytosAppModel {
 
     public func registerWindow(_ window: NSWindow, for id: UUID) {
         windowToID[ObjectIdentifier(window)] = id
+        kLog("[KytosDebug][AppModel] registerWindow(\(id.uuidString.prefix(8))) title='\(window.title)' contentView=\(window.contentView != nil)")
         attemptPendingTabRestoration()
     }
 
@@ -139,7 +142,9 @@ public final class KytosAppModel {
         let unclaimed = windows.filter { !claimedWindowIDs.contains($0.key) }
         if let (oldKey, existing) = unclaimed.first {
             kLog("[KytosDebug][AppModel]   → remapping \(oldKey.uuidString.prefix(8)) → \(windowID.uuidString.prefix(8))")
+            restoredWindowIDRemap[oldKey] = windowID
             Self.migratePanelDefaults(from: oldKey, to: windowID)
+            remapPendingTabGroups(from: oldKey, to: windowID)
             var updated = windows
             updated.removeValue(forKey: oldKey)
             updated[windowID] = existing
@@ -260,31 +265,80 @@ public final class KytosAppModel {
     }
 
     public func preparePendingTabRestoration(_ groups: [[UUID]]) {
-        pendingTabGroups = groups.filter { $0.count > 1 }
+        pendingTabGroups = groups
+            .map { group in group.map { restoredWindowIDRemap[$0] ?? $0 } }
+            .filter { $0.count > 1 }
+        let summary = pendingTabGroups.map { group in group.map { String($0.uuidString.prefix(8)) } }
+        kLog("[KytosDebug][AppModel] preparePendingTabRestoration groups=\(summary)")
         attemptPendingTabRestoration()
     }
 
-    public func attemptPendingTabRestoration() {
+    private func remapPendingTabGroups(from oldID: UUID, to newID: UUID) {
+        pendingTabGroups = pendingTabGroups.map { group in
+            group.map { $0 == oldID ? newID : $0 }
+        }
+        let summary = pendingTabGroups.map { group in group.map { String($0.uuidString.prefix(8)) } }
+        kLog("[KytosDebug][AppModel] remapPendingTabGroups \(oldID.uuidString.prefix(8)) -> \(newID.uuidString.prefix(8)) groups=\(summary)")
+    }
+
+    public func attemptPendingTabRestoration(attemptsRemaining: Int = 40) {
         guard !pendingTabGroups.isEmpty else { return }
+        let summary = pendingTabGroups.map { group in group.map { String($0.uuidString.prefix(8)) } }
+        kLog("[KytosDebug][AppModel] attemptPendingTabRestoration attempts=\(attemptsRemaining) groups=\(summary)")
 
         var unresolved: [[UUID]] = []
         for group in pendingTabGroups {
             let windows = group.compactMap(window(for:))
                 .filter { !($0 is NSPanel) && $0.contentView != nil }
+            let resolved = windows.compactMap { windowID(for: $0).map { String($0.uuidString.prefix(8)) } }
+            kLog("[KytosDebug][AppModel]   group=\(group.map { String($0.uuidString.prefix(8)) }) resolved=\(resolved)")
             guard windows.count == group.count, let anchor = windows.first else {
                 unresolved.append(group)
                 continue
             }
 
+            // Check if already tabbed together (native restoration may have handled it)
+            if let tabGroup = anchor.tabGroup, tabGroup.windows.count >= group.count {
+                let allPresent = windows.allSatisfy { w in tabGroup.windows.contains(where: { $0 === w }) }
+                if allPresent {
+                    kLog("[KytosDebug][AppModel]   group already tabbed natively, skipping")
+                    continue
+                }
+            }
+
+            // Ensure all windows are visible before tabbing — addTabbedWindow
+            // silently fails on windows that haven't been ordered yet.
+            for window in windows {
+                if !window.isVisible {
+                    window.orderFront(nil)
+                }
+            }
+
             for window in windows.dropFirst() where window !== anchor {
                 if anchor.tabGroup?.windows.contains(where: { $0 === window }) != true {
+                    kLog("[KytosDebug][AppModel]   tabbing \(windowID(for: window)?.uuidString.prefix(8) ?? "unknown") into \(windowID(for: anchor)?.uuidString.prefix(8) ?? "unknown")")
                     anchor.addTabbedWindow(window, ordered: .above)
                 }
+            }
+            // Verify tabbing succeeded
+            let tabbedCount = anchor.tabGroup?.windows.count ?? 1
+            if tabbedCount < group.count {
+                kLog("[KytosDebug][AppModel]   tabbing incomplete: expected \(group.count) got \(tabbedCount), will retry")
+                unresolved.append(group)
+            } else {
+                kLog("[KytosDebug][AppModel]   tabbing succeeded: \(tabbedCount) tabs")
             }
             anchor.makeKeyAndOrderFront(nil)
         }
 
         pendingTabGroups = unresolved
+        guard !pendingTabGroups.isEmpty, attemptsRemaining > 0, !tabRestorationRetryScheduled else { return }
+        tabRestorationRetryScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            self.tabRestorationRetryScheduled = false
+            self.attemptPendingTabRestoration(attemptsRemaining: attemptsRemaining - 1)
+        }
     }
 
     private func load() {
