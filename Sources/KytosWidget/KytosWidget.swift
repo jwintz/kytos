@@ -157,70 +157,73 @@ private struct LargeWidgetView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Header
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(Color.primary.opacity(0.6))
-                    .frame(width: 7, height: 7)
-                Text("Kytos")
-                    .font(.system(size: 11, weight: .medium))
-                Spacer()
-                Text("\(entry.snapshot.windows.count)W · \(entry.snapshot.totalTerminals)T")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            // Process tree
-            if entry.snapshot.processTree.isEmpty {
-                ForEach(displayedWindows) { window in
-                    WindowRowView(window: window, showProcessList: true)
+        VStack(alignment: .leading, spacing: 0) {
+            // Header + content pinned to top
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.primary.opacity(0.6))
+                        .frame(width: 7, height: 7)
+                    Text("Kytos")
+                        .font(.system(size: 11, weight: .medium))
+                    Spacer()
+                    Text("\(entry.snapshot.windows.count)W · \(entry.snapshot.totalTerminals)T")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
-                if entry.snapshot.windows.count > displayedWindows.count {
-                    Text("+\(entry.snapshot.windows.count - displayedWindows.count) more windows")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            } else {
-                ForEach(displayedProcessNodes) { node in
-                    HStack(spacing: 4) {
-                        if node.depth > 0 {
-                            Color.clear.frame(width: CGFloat(node.depth) * 12)
-                            Image(systemName: "arrow.turn.down.right")
-                                .font(.system(size: 7))
-                                .foregroundStyle(.quaternary)
-                        }
-                        Circle()
-                            .fill(node.isDeepest ? Color.accentColor : Color.secondary.opacity(0.6))
-                            .frame(width: 5, height: 5)
-                        Text(node.command)
-                            .font(.system(size: 10, design: .monospaced))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Text(String(node.pid))
-                            .font(.system(size: 9, design: .monospaced))
+
+                Divider()
+
+                // Process tree
+                if entry.snapshot.processTree.isEmpty {
+                    ForEach(displayedWindows) { window in
+                        WindowRowView(window: window, showProcessList: true)
+                    }
+                    if entry.snapshot.windows.count > displayedWindows.count {
+                        Text("+\(entry.snapshot.windows.count - displayedWindows.count) more windows")
+                            .font(.caption2)
                             .foregroundStyle(.tertiary)
-                        Spacer()
-                        Text(String(format: "%.0f MB", node.rssMB))
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        Text(node.cpu)
-                            .font(.system(size: 9, design: .monospaced))
+                    }
+                } else {
+                    ForEach(displayedProcessNodes) { node in
+                        HStack(spacing: 4) {
+                            if node.depth > 0 {
+                                Color.clear.frame(width: CGFloat(node.depth) * 12)
+                                Image(systemName: "arrow.turn.down.right")
+                                    .font(.system(size: 7))
+                                    .foregroundStyle(.quaternary)
+                            }
+                            Circle()
+                                .fill(node.isDeepest ? Color.accentColor : Color.secondary.opacity(0.6))
+                                .frame(width: 5, height: 5)
+                            Text(node.command)
+                                .font(.system(size: 10, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text(String(node.pid))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                            Spacer()
+                            Text(String(format: "%.0f MB", node.rssMB))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Text(node.cpu)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    if entry.snapshot.processTree.count > displayedProcessNodes.count {
+                        Text("+\(entry.snapshot.processTree.count - displayedProcessNodes.count) more")
+                            .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
                 }
-                if entry.snapshot.processTree.count > displayedProcessNodes.count {
-                    Text("+\(entry.snapshot.processTree.count - displayedProcessNodes.count) more")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
             }
+            .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 0)
 
-            // Footer
+            // Footer pinned to bottom
             Text("Updated \(entry.snapshot.date, style: .relative) ago")
                 .font(.caption2)
                 .foregroundStyle(.quaternary)

@@ -42,11 +42,15 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
 
     // MARK: - Init
 
+    /// Dragged file/URL types this view accepts.
+    private static let dropTypes: [NSPasteboard.PasteboardType] = [.string, .fileURL, .URL]
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
         layer?.isOpaque = false
         layerContentsRedrawPolicy = .onSetNeedsDisplay
+        registerForDraggedTypes(Self.dropTypes)
         setupScroller()
     }
 
@@ -383,6 +387,11 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return false }
 
+        // Only handle key equivalents if we are the first responder.
+        // With splits, multiple KytosGhosttyViews are in the hierarchy — without
+        // this check, the first one that matches a binding wins (not the focused one).
+        guard window?.firstResponder === self else { return false }
+
         // Let Kytos-owned shortcuts propagate to menu bar / SwiftUI responder chain
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
@@ -615,6 +624,48 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
         // Do NOT call perform(selector) — that would trigger NSResponder actions
         // (insertNewline:, deleteBackward:, etc.) that interfere with key event processing.
         // Key events are handled entirely through keyAction/ghostty_surface_key.
+    }
+
+    // MARK: - Drag and Drop (NSDraggingDestination)
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard let types = sender.draggingPasteboard.types,
+              !Set(types).isDisjoint(with: Self.dropTypes) else { return [] }
+        return .copy
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let pb = sender.draggingPasteboard
+
+        let content: String?
+        if let url = pb.string(forType: .URL) {
+            // URLs get shell-escaped as-is
+            content = Self.shellEscape(url)
+        } else if let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty {
+            // File URLs: escape each path, join with space
+            content = urls.map { Self.shellEscape($0.path) }.joined(separator: " ")
+        } else if let str = pb.string(forType: .string) {
+            // Plain strings are not escaped (may be commands to execute)
+            content = str
+        } else {
+            content = nil
+        }
+
+        guard let content, !content.isEmpty else { return false }
+        DispatchQueue.main.async {
+            self.insertText(content, replacementRange: NSRange(location: 0, length: 0))
+        }
+        return true
+    }
+
+    /// Escape shell-sensitive characters for safe terminal insertion.
+    private nonisolated static let shellEscapeChars = "\\ ()[]{}<>\"'`!#$&;|*?\t"
+    nonisolated static func shellEscape(_ str: String) -> String {
+        var result = str
+        for char in shellEscapeChars {
+            result = result.replacingOccurrences(of: String(char), with: "\\\(char)")
+        }
+        return result
     }
 
     // MARK: - Helpers

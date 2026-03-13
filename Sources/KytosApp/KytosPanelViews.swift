@@ -10,6 +10,8 @@ struct KytosSessionsSidebar: View {
     @Environment(KytosWorkspace.self) private var workspace
 
     var body: some View {
+        // Observe metadataVersion to re-render when titles/pwd/processName change
+        let _ = workspace.splitTree.metadataVersion
         ScrollView {
             VStack(spacing: 6) {
                 ForEach(workspace.splitTree.allPanes, id: \.id) { pane in
@@ -53,7 +55,7 @@ private struct KytosPaneRowView: View {
             Spacer()
 
             // Position indicator (SF Symbol composition) — trailing side
-            if let posSteps = workspace.splitTree.positionSteps(for: pane.id), workspace.splitTree.isSplit {
+            if workspace.splitTree.isSplit, let posSteps = workspace.splitTree.positionSteps(for: pane.id) {
                 HStack(spacing: 1) {
                     ForEach(Array(posSteps.enumerated()), id: \.offset) { _, step in
                         Image(systemName: step.sfSymbol)
@@ -97,10 +99,11 @@ private struct KytosPaneRowView: View {
         .onHover { isHovering = $0 }
     }
 
+    private static let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+
     private func abbreviatePath(_ path: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        if path.hasPrefix(home) {
-            return "~" + path.dropFirst(home.count)
+        if path.hasPrefix(Self.homePath) {
+            return "~" + path.dropFirst(Self.homePath.count)
         }
         return path
     }

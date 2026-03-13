@@ -67,7 +67,7 @@ targets:
       PRODUCT_NAME: Kytos
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.Kytos
       OTHER_LDFLAGS: "-lc++"
-      ASSETCATALOG_COMPILER_APPICON_NAME: ""
+      ASSETCATALOG_COMPILER_APPICON_NAME: Kytos
     entitlements:
       path: Sources/KytosApp/Kytos.entitlements
 

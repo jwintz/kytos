@@ -97,12 +97,54 @@ public indirect enum KytosSplitNode: Codable, Sendable {
 public final class KytosSplitTree: Codable, @unchecked Sendable {
     public var root: KytosSplitNode
 
+    /// Mutable pane metadata stored separately to avoid rebuilding the tree
+    /// on every title/pwd/processName change. Only structural mutations (split,
+    /// remove, move) modify the tree, keeping view invalidations minimal.
+    @ObservationIgnored
+    private var paneMetadata: [UUID: PaneMetadata] = [:]
+
+    /// Monotonic counter bumped on metadata changes so views can subscribe
+    /// to a lightweight signal rather than the entire tree structure.
+    var metadataVersion: UInt64 = 0
+
+    private struct PaneMetadata {
+        var title: String = ""
+        var pwd: String = ""
+        var processName: String = ""
+    }
+
     public init(root: KytosSplitNode) {
         self.root = root
+        rebuildMetadataIndex()
     }
 
     public convenience init(pane: KytosPane) {
         self.init(root: .leaf(pane))
+    }
+
+    /// Rebuild the metadata index from the tree structure.
+    private func rebuildMetadataIndex() {
+        var newMetadata: [UUID: PaneMetadata] = [:]
+        Self.collectMetadata(node: root, into: &newMetadata)
+        // Merge existing metadata (preserves runtime-only fields like processName)
+        for (id, existing) in paneMetadata {
+            if newMetadata[id] != nil {
+                if !existing.processName.isEmpty { newMetadata[id]!.processName = existing.processName }
+                if !existing.title.isEmpty && newMetadata[id]!.title.isEmpty { newMetadata[id]!.title = existing.title }
+                if !existing.pwd.isEmpty && newMetadata[id]!.pwd.isEmpty { newMetadata[id]!.pwd = existing.pwd }
+            }
+        }
+        paneMetadata = newMetadata
+    }
+
+    private static func collectMetadata(node: KytosSplitNode, into result: inout [UUID: PaneMetadata]) {
+        switch node {
+        case .leaf(let pane):
+            result[pane.id] = PaneMetadata(title: pane.title, pwd: pane.pwd, processName: pane.processName)
+        case .split(let s):
+            collectMetadata(node: s.left, into: &result)
+            collectMetadata(node: s.right, into: &result)
+        }
     }
 
     // MARK: - Codable
@@ -112,18 +154,46 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.root = try container.decode(KytosSplitNode.self, forKey: .root)
+        rebuildMetadataIndex()
     }
 
     public func encode(to encoder: Encoder) throws {
+        // Bake metadata back into tree for persistence
+        var bakedRoot = root
+        for (id, meta) in paneMetadata {
+            bakedRoot = Self.updatedPaneFields(node: bakedRoot, paneID: id, title: meta.title, pwd: meta.pwd, processName: meta.processName)
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(root, forKey: .root)
+        try container.encode(bakedRoot, forKey: .root)
+    }
+
+    private static func updatedPaneFields(node: KytosSplitNode, paneID: UUID, title: String, pwd: String, processName: String) -> KytosSplitNode {
+        switch node {
+        case .leaf(var pane):
+            if pane.id == paneID {
+                pane.title = title
+                pane.pwd = pwd
+                pane.processName = processName
+            }
+            return .leaf(pane)
+        case .split(let s):
+            return .split(.init(direction: s.direction, ratio: s.ratio,
+                                left: updatedPaneFields(node: s.left, paneID: paneID, title: title, pwd: pwd, processName: processName),
+                                right: updatedPaneFields(node: s.right, paneID: paneID, title: title, pwd: pwd, processName: processName)))
+        }
     }
 
     // MARK: - Query
 
-    /// First leaf pane in the tree (leftmost/topmost).
+    /// First leaf pane in the tree (leftmost/topmost), with metadata merged.
     public var firstLeaf: KytosPane {
-        Self.firstLeaf(of: root)
+        var pane = Self.firstLeaf(of: root)
+        if let meta = paneMetadata[pane.id] {
+            pane.title = meta.title
+            pane.pwd = meta.pwd
+            pane.processName = meta.processName
+        }
+        return pane
     }
 
     private static func firstLeaf(of node: KytosSplitNode) -> KytosPane {
@@ -133,10 +203,18 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
         }
     }
 
-    /// All leaf panes in the tree, in order.
+    /// All leaf panes in the tree, in order, with current metadata merged in.
     public var allPanes: [KytosPane] {
         var result: [KytosPane] = []
         Self.collectLeaves(node: root, into: &result)
+        // Merge runtime metadata
+        for i in result.indices {
+            if let meta = paneMetadata[result[i].id] {
+                result[i].title = meta.title
+                result[i].pwd = meta.pwd
+                result[i].processName = meta.processName
+            }
+        }
         return result
     }
 
@@ -150,9 +228,15 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
         }
     }
 
-    /// Find the pane with the given ID.
+    /// Find the pane with the given ID, with current metadata merged in.
     public func findPane(_ id: UUID) -> KytosPane? {
-        Self.findPane(id, in: root)
+        guard var pane = Self.findPane(id, in: root) else { return nil }
+        if let meta = paneMetadata[id] {
+            pane.title = meta.title
+            pane.pwd = meta.pwd
+            pane.processName = meta.processName
+        }
+        return pane
     }
 
     private static func findPane(_ id: UUID, in node: KytosSplitNode) -> KytosPane? {
@@ -175,6 +259,7 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
     /// Split a pane, inserting a new pane next to it.
     public func split(at paneID: UUID, direction: KytosSplitDirection, newPane: KytosPane) {
         root = Self.insertSplit(node: root, at: paneID, direction: direction, newPane: newPane)
+        rebuildMetadataIndex()
     }
 
     private static func insertSplit(node: KytosSplitNode, at paneID: UUID, direction: KytosSplitDirection, newPane: KytosPane) -> KytosSplitNode {
@@ -197,6 +282,7 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
     public func remove(paneID: UUID) -> UUID? {
         guard let (newRoot, focusID) = Self.removeNode(node: root, paneID: paneID) else { return nil }
         root = newRoot
+        paneMetadata.removeValue(forKey: paneID)
         return focusID
     }
 
@@ -272,55 +358,25 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
         }
     }
 
-    /// Update pane title by ID.
+    /// Update pane title by ID. Metadata-only — does NOT rebuild the tree.
     public func updateTitle(_ title: String, for paneID: UUID) {
-        root = Self.updatedTitle(node: root, paneID: paneID, title: title)
+        guard paneMetadata[paneID]?.title != title else { return }
+        paneMetadata[paneID, default: PaneMetadata()].title = title
+        metadataVersion &+= 1
     }
 
-    private static func updatedTitle(node: KytosSplitNode, paneID: UUID, title: String) -> KytosSplitNode {
-        switch node {
-        case .leaf(var pane):
-            if pane.id == paneID { pane.title = title }
-            return .leaf(pane)
-        case .split(let s):
-            return .split(.init(direction: s.direction, ratio: s.ratio,
-                                left: updatedTitle(node: s.left, paneID: paneID, title: title),
-                                right: updatedTitle(node: s.right, paneID: paneID, title: title)))
-        }
-    }
-
-    /// Update pane process name by ID.
+    /// Update pane process name by ID. Metadata-only — does NOT rebuild the tree.
     public func updateProcessName(_ name: String, for paneID: UUID) {
-        root = Self.updatedProcessName(node: root, paneID: paneID, name: name)
+        guard paneMetadata[paneID]?.processName != name else { return }
+        paneMetadata[paneID, default: PaneMetadata()].processName = name
+        metadataVersion &+= 1
     }
 
-    private static func updatedProcessName(node: KytosSplitNode, paneID: UUID, name: String) -> KytosSplitNode {
-        switch node {
-        case .leaf(var pane):
-            if pane.id == paneID { pane.processName = name }
-            return .leaf(pane)
-        case .split(let s):
-            return .split(.init(direction: s.direction, ratio: s.ratio,
-                                left: updatedProcessName(node: s.left, paneID: paneID, name: name),
-                                right: updatedProcessName(node: s.right, paneID: paneID, name: name)))
-        }
-    }
-
-    /// Update pane working directory by ID.
+    /// Update pane working directory by ID. Metadata-only — does NOT rebuild the tree.
     public func updatePwd(_ pwd: String, for paneID: UUID) {
-        root = Self.updatedPwd(node: root, paneID: paneID, pwd: pwd)
-    }
-
-    private static func updatedPwd(node: KytosSplitNode, paneID: UUID, pwd: String) -> KytosSplitNode {
-        switch node {
-        case .leaf(var pane):
-            if pane.id == paneID { pane.pwd = pwd }
-            return .leaf(pane)
-        case .split(let s):
-            return .split(.init(direction: s.direction, ratio: s.ratio,
-                                left: updatedPwd(node: s.left, paneID: paneID, pwd: pwd),
-                                right: updatedPwd(node: s.right, paneID: paneID, pwd: pwd)))
-        }
+        guard paneMetadata[paneID]?.pwd != pwd else { return }
+        paneMetadata[paneID, default: PaneMetadata()].pwd = pwd
+        metadataVersion &+= 1
     }
 
     // MARK: - Position Path
@@ -462,14 +518,15 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
     /// Move a pane from one location to another, splitting the target in the given zone direction.
     public func movePane(sourceID: UUID, targetID: UUID, zone: KytosSplitDropZone) {
         guard sourceID != targetID else { return }
-        // Extract the source pane first
-        guard let sourcePane = findPane(sourceID) else { return }
+        // Extract the source pane first (use raw tree, not metadata-merged)
+        guard let sourcePane = Self.findPane(sourceID, in: root) else { return }
         // Remove source from tree
         guard let (treeWithoutSource, _) = Self.removeNode(node: root, paneID: sourceID) else { return }
         // Insert source next to target in the specified zone direction
         let direction: KytosSplitDirection = (zone == .left || zone == .right) ? .horizontal : .vertical
         let sourceOnLeft = (zone == .left || zone == .top)
         root = Self.insertAt(node: treeWithoutSource, targetID: targetID, newPane: sourcePane, direction: direction, newPaneFirst: sourceOnLeft)
+        rebuildMetadataIndex()
     }
 
     private static func insertAt(node: KytosSplitNode, targetID: UUID, newPane: KytosPane, direction: KytosSplitDirection, newPaneFirst: Bool) -> KytosSplitNode {

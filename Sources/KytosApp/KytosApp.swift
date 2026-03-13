@@ -131,7 +131,6 @@ struct PaneWorkspaceView: View {
                         .onAppear { splitTreeSize = geo.size }
                         .onChange(of: geo.size) { _, newSize in
                             splitTreeSize = newSize
-                            kLog("[SplitTree] size updated: \(newSize)")
                         }
                 }
                 .allowsHitTesting(false)
@@ -271,8 +270,7 @@ struct PaneWorkspaceView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyFocusChanged"))) { notif in
             guard notificationTargetsCurrentWindow(notif),
-                  let paneID = notif.userInfo?["paneID"] as? UUID,
-                  workspace.splitTree.findPane(paneID) != nil else { return }
+                  let paneID = notif.userInfo?["paneID"] as? UUID else { return }
             workspace.focusedPaneID = paneID
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosSearchNext"))) { notif in
@@ -616,19 +614,17 @@ struct KytosWindowView: View {
             refreshProcessNames(workspace: workspace)
             focusCurrentPane(in: workspace)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notif in
-            guard let window = notif.object as? NSWindow,
-                  appModel.windowID(for: window) == stableID else { return }
-            focusCurrentPane(in: workspace)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeMainNotification)) { notif in
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)
+                .merge(with: NotificationCenter.default.publisher(for: NSWindow.didBecomeMainNotification))
+        ) { notif in
             guard let window = notif.object as? NSWindow,
                   appModel.windowID(for: window) == stableID else { return }
             focusCurrentPane(in: workspace)
         }
         .task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
+                try? await Task.sleep(for: .seconds(5))
                 refreshProcessNames(workspace: workspace)
             }
         }
@@ -643,7 +639,28 @@ struct KytosWindowView: View {
         }
     }
 
+    /// Throttle process name detection — at most once per 2 seconds.
+    @State private var lastProcessRefresh: Date = .distantPast
+    @State private var processRefreshScheduled = false
+
     private func refreshProcessNames(workspace: KytosWorkspace) {
+        let now = Date()
+        let elapsed = now.timeIntervalSince(lastProcessRefresh)
+        if elapsed < 2.0 {
+            // Throttle: schedule a deferred refresh if not already pending
+            guard !processRefreshScheduled else { return }
+            processRefreshScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + (2.0 - elapsed)) { [self] in
+                processRefreshScheduled = false
+                doRefreshProcessNames(workspace: workspace)
+            }
+            return
+        }
+        doRefreshProcessNames(workspace: workspace)
+    }
+
+    private func doRefreshProcessNames(workspace: KytosWorkspace) {
+        lastProcessRefresh = Date()
         let panes = workspace.splitTree.allPanes
         Task {
             let updates = await Task.detached {
@@ -653,7 +670,6 @@ struct KytosWindowView: View {
                 workspace.splitTree.updateProcessName(name, for: id)
             }
             updateToolbar(workspace: workspace)
-            // Notify inspector to refresh too
             NotificationCenter.default.post(
                 name: NSNotification.Name("KytosProcessNamesUpdated"),
                 object: nil

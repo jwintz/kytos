@@ -335,11 +335,12 @@ final class KytosGhosttyApp {
             kLog("[Ghostty] Clipboard read ignored: missing surface")
             return false
         }
+        // Use "opinionated" clipboard read: file URLs get shell-escaped, plain strings pass through
         let str = if Thread.isMainThread {
-            NSPasteboard.general.string(forType: .string)
+            NSPasteboard.general.getOpinionatedStringContents()
         } else {
             DispatchQueue.main.sync {
-                NSPasteboard.general.string(forType: .string)
+                NSPasteboard.general.getOpinionatedStringContents()
             }
         }
         guard let str else {
@@ -412,5 +413,20 @@ final class KytosGhosttyApp {
             info["windowID"] = windowID
         }
         NotificationCenter.default.post(name: name, object: sourceView, userInfo: info.isEmpty ? nil : info)
+    }
+}
+
+// MARK: - Opinionated Clipboard (file URL → shell-escaped path)
+
+extension NSPasteboard {
+    /// Read clipboard with file URL awareness: file paths get shell-escaped,
+    /// plain strings pass through as-is (matching Ghostty's behavior).
+    func getOpinionatedStringContents() -> String? {
+        if let urls = readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty {
+            return urls
+                .map { $0.isFileURL ? KytosGhosttyView.shellEscape($0.path) : $0.absoluteString }
+                .joined(separator: " ")
+        }
+        return self.string(forType: .string)
     }
 }

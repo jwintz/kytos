@@ -155,7 +155,7 @@ private struct KytosSplitNodeView: View {
     }
 
     private var isSplitContext: Bool {
-        true
+        tree.isSplit
     }
 }
 
