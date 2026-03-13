@@ -100,13 +100,15 @@ private struct SmallWidgetView: View {
     }
 }
 
-// MARK: - Medium (left branding + right navigator pane grid)
+// MARK: - Medium (left branding + 3-row pane list)
 
 private struct MediumWidgetView: View {
     let entry: KytosWidgetEntry
 
+    /// Last 3 active panes (most recent at top).
     private var displayPanes: [KytosWidgetPane] {
-        Array(entry.snapshot.panes.prefix(3))
+        let panes = entry.snapshot.panes
+        return Array(panes.suffix(3).reversed())
     }
 
     var body: some View {
@@ -133,77 +135,61 @@ private struct MediumWidgetView: View {
 
             Divider().padding(.horizontal, 6)
 
-            // Right column — pane grid
-            Grid(alignment: .leading, verticalSpacing: 4) {
-                if displayPanes.isEmpty {
-                    ForEach(Array(entry.snapshot.windows.prefix(3))) { window in
-                        GridRow {
-                            WindowRowView(window: window, showProcessList: false)
-                        }
-                    }
-                } else {
-                    ForEach(displayPanes) { pane in
-                        GridRow {
-                            WidgetPaneRowView(pane: pane, isSplit: entry.snapshot.panes.count > 1)
-                        }
-                    }
-                    if entry.snapshot.panes.count > displayPanes.count {
-                        GridRow {
-                            Text("+\(entry.snapshot.panes.count - displayPanes.count) more")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
+            // Right column — 3 pane rows with background cards
+            VStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { index in
+                    if index < displayPanes.count {
+                        PaneCellView(pane: displayPanes[index])
+                    } else {
+                        PaneCellView(pane: nil)
                     }
                 }
-                // Spacer row absorbs remaining height
-                GridRow { Color.clear }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
     }
 }
 
-/// Navigator-style pane row for medium widget.
-private struct WidgetPaneRowView: View {
-    let pane: KytosWidgetPane
-    let isSplit: Bool
+/// A single pane row cell for the medium widget.
+private struct PaneCellView: View {
+    let pane: KytosWidgetPane?
 
     var body: some View {
-        HStack(spacing: 8) {
-            // Focus indicator
-            Circle()
-                .fill(pane.isFocused ? Color.accentColor : Color.clear)
-                .frame(width: 6, height: 6)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(pane.processName)
-                    .font(.system(size: 11, weight: pane.isFocused ? .medium : .regular))
-                    .lineLimit(1)
-
-                if !pane.path.isEmpty {
-                    Text(pane.path)
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
+        HStack(spacing: 6) {
+            if let pane {
+                Circle()
+                    .fill(pane.isFocused ? Color.accentColor : Color.secondary.opacity(0.5))
+                    .frame(width: 5, height: 5)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(pane.processName)
+                        .font(.system(size: 10, weight: pane.isFocused ? .semibold : .regular, design: .monospaced))
                         .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            // Position indicator (SF Symbol composition)
-            if isSplit, !pane.positionSymbols.isEmpty {
-                HStack(spacing: 1) {
-                    ForEach(Array(pane.positionSymbols.enumerated()), id: \.offset) { _, symbol in
-                        Image(systemName: symbol)
+                    if !pane.path.isEmpty {
+                        Text(pane.path)
                             .font(.system(size: 8))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer(minLength: 0)
+                if !pane.positionSymbols.isEmpty {
+                    HStack(spacing: 1) {
+                        ForEach(Array(pane.positionSymbols.enumerated()), id: \.offset) { _, symbol in
+                            Image(systemName: symbol)
+                                .font(.system(size: 8))
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(.fill.quinary, in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -217,7 +203,7 @@ private struct LargeWidgetView: View {
     }
 
     private var displayedProcessNodes: [KytosWidgetProcessNode] {
-        Array(entry.snapshot.processTree.prefix(8))
+        Array(entry.snapshot.processTree.prefix(16))
     }
 
     @ViewBuilder
