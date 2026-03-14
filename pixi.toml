@@ -39,7 +39,7 @@ run = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kyto
 # -- Release packaging tasks --
 
 # Build Release configuration via xcodebuild.
-build-release = { cmd = "bash -c 'BUILD_VERSION=$(date +%s); xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release build -allowProvisioningUpdates CURRENT_PROJECT_VERSION=\"$BUILD_VERSION\"'", depends-on = ["build-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
+build-release = { cmd = "bash -c 'BUILD_VERSION=$(date +%s); xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release build -allowProvisioningUpdates ARCHS=arm64 CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO CURRENT_PROJECT_VERSION=\"$BUILD_VERSION\"'", depends-on = ["build-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
 
 # Assemble the .app bundle from the Release build output.
 # xcodebuild already produces a full Kytos.app (with widget appex bundled
@@ -51,7 +51,7 @@ dmg = { cmd = "bash -c 'set -e; VERSION=$(git describe --tags --abbrev=0 2>/dev/
 
 # Code sign the .app bundle. Set SIGN_IDENTITY env var for distribution signing;
 # defaults to ad-hoc ("-") for local testing.
-sign = { cmd = "bash -c 'set -e; IDENTITY=\"${SIGN_IDENTITY:--}\"; if [ \"$IDENTITY\" = \"-\" ]; then codesign --force --deep --sign - Kytos.app; echo \"Ad-hoc signed Kytos.app\"; else codesign --force --deep --options runtime --sign \"$IDENTITY\" Kytos.app; echo \"Signed Kytos.app with: $IDENTITY\"; fi'", depends-on = ["package"] }
+sign = { cmd = "bash -c 'set -e; IDENTITY=\"${SIGN_IDENTITY:--}\"; if [ \"$IDENTITY\" = \"-\" ]; then codesign --force --deep --sign - Kytos.app; echo \"Ad-hoc signed Kytos.app\"; else for BIN in $(find Kytos.app -type f -perm +111 | xargs file | grep Mach-O | cut -d: -f1); do codesign --force --options runtime --timestamp --sign \"$IDENTITY\" \"$BIN\"; done; codesign --force --options runtime --timestamp --sign \"$IDENTITY\" Kytos.app; echo \"Signed Kytos.app with: $IDENTITY\"; fi'", depends-on = ["package"] }
 
 # Submit the DMG for Apple notarization.
 # Requires: APPLE_ID, APPLE_PASSWORD (app-specific), APPLE_TEAM_ID env vars.

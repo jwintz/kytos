@@ -136,6 +136,7 @@ public final class KytosAppModel {
     public func workspace(for windowID: UUID) -> KytosWorkspace {
         if let existing = windows[windowID] {
             claimedWindowIDs.insert(windowID)
+            kLog("[Restore][AppModel] workspace(for: \(windowID.uuidString.prefix(8))) — exact match, panes=\(existing.splitTree.allPanes.count)")
             return existing
         }
         kLog("[KytosDebug][AppModel] workspace(for: \(windowID.uuidString.prefix(8))) — no exact match")
@@ -256,7 +257,9 @@ public final class KytosAppModel {
             let oldKey = oldPrefix + suffix
             let newKey = newPrefix + suffix
             if defaults.object(forKey: oldKey) != nil {
-                defaults.set(defaults.bool(forKey: oldKey), forKey: newKey)
+                let val = defaults.bool(forKey: oldKey)
+                kLog("[Restore][AppModel] migratePanelDefaults \(suffix)=\(val) from \(oldID.uuidString.prefix(8)) → \(newID.uuidString.prefix(8))")
+                defaults.set(val, forKey: newKey)
                 defaults.removeObject(forKey: oldKey)
             }
         }

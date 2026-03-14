@@ -42,6 +42,43 @@ All build operations use `pixi run <task>`. Run `pixi task list` to see all avai
 | `notarize` | Submit DMG for Apple notarization (requires `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`) |
 | `changelog` | Generate changelog from git log since last tag |
 
+### Signing, Packaging & Notarization
+
+The full distribution workflow builds a Release `.app`, signs it with a Developer ID certificate, wraps it in a DMG, and submits to Apple for notarization.
+
+**Requirements:**
+- A "Developer ID Application" certificate in Keychain (check with `security find-identity -v -p codesigning | grep "Developer ID"`)
+- An app-specific password for your Apple ID (generate at [appleid.apple.com](https://appleid.apple.com/account/manage) under Sign-In and Security > App-Specific Passwords)
+
+**Full pipeline:**
+
+```bash
+export SIGN_IDENTITY="Developer ID Application: Your Name (TEAM_ID)"
+export APPLE_ID="your@apple.id"
+export APPLE_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+export APPLE_TEAM_ID="YOUR_TEAM_ID"
+
+git tag v0.1.0          # DMG filename uses git describe
+pixi run sign           # → build-release → package → sign
+pixi run dmg            # → Kytos-0.1.0.dmg
+pixi run notarize       # → submit, wait, staple
+```
+
+**Build details:**
+- `build-release` passes `ARCHS=arm64` (GhosttyKit is arm64-only) and `CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO` (strips `com.apple.security.get-task-allow` which blocks notarization)
+- `sign` with a `SIGN_IDENTITY` signs each Mach-O binary individually with `--options runtime --timestamp` (hardened runtime + secure timestamp, both required by notarization)
+- Without `SIGN_IDENTITY`, `sign` defaults to ad-hoc (`codesign --force --deep --sign -`) for local testing
+
+**Individual steps:**
+
+```bash
+pixi run package          # Build Release + copy .app to project root
+pixi run sign             # Ad-hoc sign (or set SIGN_IDENTITY for distribution)
+pixi run dmg              # Create Kytos-<version>.dmg
+pixi run notarize         # Submit DMG, wait for Apple, staple ticket
+pixi run changelog        # Generate changelog since last git tag
+```
+
 ## Architecture
 
 | Component | Role |

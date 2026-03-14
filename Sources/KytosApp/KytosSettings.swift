@@ -11,6 +11,7 @@ public final class KytosSettings {
 
     private let horizontalMarginKey = "kytos_horizontalMargin"
     private let inspectorRefreshKey = "kytos_inspectorRefreshInterval"
+    private let focusFollowsMouseKey = "kytos_focusFollowsMouse"
 
     public var horizontalMargin: CGFloat {
         didSet { UserDefaults.standard.set(horizontalMargin, forKey: horizontalMarginKey) }
@@ -20,13 +21,19 @@ public final class KytosSettings {
         didSet { UserDefaults.standard.set(inspectorRefreshInterval, forKey: inspectorRefreshKey) }
     }
 
+    public var focusFollowsMouse: Bool {
+        didSet { UserDefaults.standard.set(focusFollowsMouse, forKey: focusFollowsMouseKey) }
+    }
+
     private init() {
         let defaults = UserDefaults.standard
         defaults.register(defaults: [
             horizontalMarginKey: 0.0,
             inspectorRefreshKey: 2.0,
+            focusFollowsMouseKey: false,
         ])
         self.horizontalMargin = CGFloat(defaults.double(forKey: horizontalMarginKey))
         self.inspectorRefreshInterval = defaults.double(forKey: inspectorRefreshKey)
+        self.focusFollowsMouse = defaults.bool(forKey: focusFollowsMouseKey)
     }
 }

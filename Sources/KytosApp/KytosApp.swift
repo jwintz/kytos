@@ -516,8 +516,10 @@ struct KytosWindowView: View {
             }
         }
         .onAppear {
+            kLog("[Restore] KytosWindowView.onAppear stableID=\(stableID.uuidString.prefix(8))")
             if workspace == nil {
                 workspace = appModel.workspace(for: stableID)
+                kLog("[Restore] workspace claimed for \(stableID.uuidString.prefix(8))")
             }
             if let ws = workspace {
                 let stablePrefix = "me.jwintz.kytos.session.\(ws.session.id.uuidString)"
@@ -525,6 +527,7 @@ struct KytosWindowView: View {
                     persistencePrefix: "me.jwintz.kytos",
                     panelPrefix: stablePrefix
                 )
+                kLog("[Restore] shellState created, inspectorVisible=\(windowShellState.inspectorVisible)")
             }
             if windowID == nil { windowID = stableID }
 

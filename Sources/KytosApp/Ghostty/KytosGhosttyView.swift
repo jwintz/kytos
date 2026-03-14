@@ -218,8 +218,10 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         guard let surface, newSize.width > 0, newSize.height > 0 else { return }
+        let oldSize = contentSize
         contentSize = newSize
         let fb = convertToBacking(NSRect(origin: .zero, size: newSize)).size
+        kLog("[Resize] pane=\(paneID?.uuidString.prefix(4) ?? "nil") \(Int(oldSize.width))x\(Int(oldSize.height)) → \(Int(newSize.width))x\(Int(newSize.height)) fb=\(Int(fb.width))x\(Int(fb.height))")
         ghostty_surface_set_size(surface, UInt32(fb.width), UInt32(fb.height))
     }
     
@@ -502,6 +504,20 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     }
 
     // MARK: - Mouse
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        guard KytosSettings.shared.focusFollowsMouse,
+              let window else { return }
+        // Make the window key if it isn't already (cross-window focus)
+        if !window.isKeyWindow {
+            window.makeKeyAndOrderFront(nil)
+        }
+        // Focus this pane within the window
+        if window.firstResponder !== self {
+            window.makeFirstResponder(self)
+        }
+    }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)

@@ -53,6 +53,8 @@ private struct KytosTerminalSettingsTab: View {
                     Text(String(format: "%.1fs", settings.inspectorRefreshInterval))
                         .frame(width: 40, alignment: .trailing)
                 }
+                Toggle("Focus Follows Mouse", isOn: $settings.focusFollowsMouse)
+                    .help("Automatically focus a split pane when the mouse enters it")
             }
         }
         .formStyle(.grouped)
