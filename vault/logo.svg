@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Kytos — terminal prompt glyph: > chevron + cursor block -->
+<svg width="800" height="800" viewBox="0 0 800 800" xmlns="http://www.w3.org/2000/svg">
+  <!-- > chevron -->
+  <polygon fill="#929292" points="165,223 165,340 330,400 165,460 165,577 517,400"/>
+  <!-- _ cursor -->
+  <rect fill="#929292" x="541" y="460" width="94" height="117"/>
+</svg>

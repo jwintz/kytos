@@ -22,6 +22,9 @@ Package.resolved
 .gemini/
 *.log
 .claude
+AGENTS.md
+PLAN.md
+TODO.md
 
 # Build Artifacts
 mksh_bin
