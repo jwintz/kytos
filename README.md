@@ -1,6 +1,8 @@
 # Kytos
 
-A terminal emulator for macOS built on [libghostty](https://github.com/ghostty-org/ghostty) and [KelyphosKit](../kelyphos).
+A terminal emulator for macOS built on [libghostty](https://github.com/ghostty-org/ghostty) and [KelyphosKit](https://github.com/jwintz/kelyphos).
+
+**[Documentation](https://jwintz.github.io/kytos)**
 
 ## Prerequisites
 
