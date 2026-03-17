@@ -39,6 +39,8 @@ targets:
           mkdir -p "$RESOURCES_DIR/ghostty"
           cp -R "${SRCROOT}/Resources/ghostty/shell-integration" "$RESOURCES_DIR/ghostty/"
           cp -R "${SRCROOT}/Resources/terminfo" "$RESOURCES_DIR/"
+          mkdir -p "$RESOURCES_DIR/themes"
+          cp -R "${SRCROOT}/Resources/themes/"* "$RESOURCES_DIR/themes/"
     postBuildScripts:
       - name: Register widget
         basedOnDependencyAnalysis: false

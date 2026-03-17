@@ -9,13 +9,43 @@ import GhosttyKit
 struct KytosSessionsSidebar: View {
     @Environment(KytosWorkspace.self) private var workspace
 
+    private var appModel: KytosAppModel { KytosAppModel.shared }
+
+    /// Current window's UUID, derived by finding which key maps to our workspace.
+    private var currentWindowID: UUID? {
+        appModel.windows.first { $0.value === workspace }?.key
+    }
+
     var body: some View {
         // Observe metadataVersion to re-render when titles/pwd/processName change
         let _ = workspace.splitTree.metadataVersion
         ScrollView {
             VStack(spacing: 6) {
+                // Current window panes
                 ForEach(workspace.splitTree.allPanes, id: \.id) { pane in
                     KytosPaneRowView(pane: pane, workspace: workspace)
+                }
+
+                // Other windows
+                let otherWindows = appModel.windows
+                    .filter { $0.key != currentWindowID }
+                    .sorted { $0.key.uuidString < $1.key.uuidString }
+
+                if !otherWindows.isEmpty {
+                    ForEach(otherWindows, id: \.key) { windowID, otherWorkspace in
+                        let _ = otherWorkspace.splitTree.metadataVersion
+                        Divider()
+                            .padding(.vertical, 4)
+                        KytosWindowHeader(windowID: windowID, workspace: otherWorkspace)
+                        ForEach(otherWorkspace.splitTree.allPanes, id: \.id) { pane in
+                            KytosPaneRowView(
+                                pane: pane,
+                                workspace: otherWorkspace,
+                                isRemote: true,
+                                remoteWindowID: windowID
+                            )
+                        }
+                    }
                 }
             }
             .padding(10)
@@ -25,9 +55,38 @@ struct KytosSessionsSidebar: View {
     }
 }
 
+private struct KytosWindowHeader: View {
+    let windowID: UUID
+    let workspace: KytosWorkspace
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "macwindow")
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+            Text(windowLabel)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text("\(workspace.splitTree.allPanes.count)")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var windowLabel: String {
+        let window = KytosAppModel.shared.window(for: windowID)
+        let title = window?.title ?? ""
+        return title.isEmpty ? "Window" : title
+    }
+}
+
 private struct KytosPaneRowView: View {
     let pane: KytosPane
     let workspace: KytosWorkspace
+    var isRemote: Bool = false
+    var remoteWindowID: UUID? = nil
     @State private var isHovering = false
 
     private var isFocused: Bool { workspace.focusedPaneID == pane.id }
@@ -95,6 +154,9 @@ private struct KytosPaneRowView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             workspace.focusedPaneID = pane.id
+            if isRemote, let windowID = remoteWindowID {
+                KytosAppModel.shared.window(for: windowID)?.makeKeyAndOrderFront(nil)
+            }
         }
         .onHover { isHovering = $0 }
     }
@@ -230,17 +292,28 @@ enum KytosProcessUtil {
     }
 
     /// Detect process names for a list of panes. Returns [(paneID, processName)].
+    /// `knownChildPids` maps pane UUIDs to their direct child PID (captured at surface creation).
     /// Safe to call from a detached task (no MainActor dependency).
-    static func detectProcessNames(for panes: [KytosPane]) -> [(UUID, String)] {
+    static func detectProcessNames(for panes: [KytosPane], knownChildPids: [UUID: pid_t] = [:]) -> [(UUID, String)] {
         let snapshot = psSnapshot()
         let shells = findShells(snapshot: snapshot)
-        kLog("[ProcessUtil] detectProcessNames: \(panes.count) panes, \(shells.count) shells")
+        kLog("[ProcessUtil] detectProcessNames: \(panes.count) panes, \(shells.count) shells, \(knownChildPids.count) known children")
 
         var usedShells = Set<pid_t>()
         var updates: [(UUID, String)] = []
         for pane in panes {
-            var shellPid = matchShell(for: pane, from: shells, excluding: usedShells)
-            kLog("[ProcessUtil]   pane \(pane.id.uuidString.prefix(8)) pwd='\(pane.pwd)' → cwdMatch=\(shellPid.map(String.init) ?? "nil")")
+            // Prefer known child PID from surface creation (accurate) over CWD matching (ambiguous)
+            var shellPid: pid_t? = nil
+            if let knownChild = knownChildPids[pane.id] {
+                // Walk from known child (login) to its grandchild (zsh/shell)
+                let grandchildren = findAllChildren(of: knownChild, in: snapshot)
+                shellPid = grandchildren.first ?? knownChild
+                kLog("[ProcessUtil]   pane \(pane.id.uuidString.prefix(8)) → knownChild=\(knownChild) shell=\(shellPid!)")
+            }
+            if shellPid == nil {
+                shellPid = matchShell(for: pane, from: shells, excluding: usedShells)
+                kLog("[ProcessUtil]   pane \(pane.id.uuidString.prefix(8)) pwd='\(pane.pwd)' → cwdMatch=\(shellPid.map(String.init) ?? "nil")")
+            }
             if shellPid == nil, let first = shells.first(where: { !usedShells.contains($0.shellPid) }) {
                 shellPid = first.shellPid
                 kLog("[ProcessUtil]     fallback to first unused shell: \(shellPid!)")
@@ -330,11 +403,7 @@ struct KytosProcessInfoView: View {
         .onChange(of: workspace.focusedPaneID) { _, _ in
             Task { await refresh() }
         }
-        .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in
-            guard isVisible else { return }
-            Task { await refresh() }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosProcessNamesUpdated"))) { _ in
+        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
             guard isVisible else { return }
             Task { await refresh() }
         }

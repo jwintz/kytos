@@ -36,6 +36,10 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     /// Used for keyboard focus management, view reuse, and appearance refresh.
     static var viewRegistry: [UUID: KytosGhosttyView] = [:]
 
+    /// Maps pane UUIDs to the direct child PID spawned by their ghostty surface.
+    /// Populated at surface creation time by diffing child PIDs before/after.
+    static var childPids: [UUID: pid_t] = [:]
+
     static func view(for paneID: UUID) -> KytosGhosttyView? {
         viewRegistry[paneID]
     }
@@ -56,6 +60,34 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
 
+    /// Send a named binding action to the ghostty surface (e.g. "clear_screen").
+    func sendBindingAction(_ action: String) {
+        guard let surface else { return }
+        action.withCString { ptr in
+            _ = ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
+        }
+    }
+
+    /// Clear both screen and scrollback buffer, then reset the scrollbar.
+    func clearScreenAndScrollback() {
+        guard let surface else { return }
+        kLog("[ClearScreen] before: scrollbarState=\(scrollbarState.map { "total=\($0.total) offset=\($0.offset) len=\($0.len)" } ?? "nil")")
+
+        // ghostty's clear_screen action clears display AND scrollback (history: true).
+        let result = "clear_screen".withCString { ptr in
+            ghostty_surface_binding_action(surface, ptr, UInt("clear_screen".utf8.count))
+        }
+        kLog("[ClearScreen] binding_action returned \(result)")
+
+        // Reset scrollbar overlay
+        scrollbarState = nil
+        synchronizeScrollView()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            kLog("[ClearScreen] after 500ms: scrollbarState=\(self.scrollbarState.map { "total=\($0.total) offset=\($0.offset) len=\($0.len)" } ?? "nil")")
+        }
+    }
+
     /// Explicitly close the ghostty surface, freeing the PTY and killing child processes.
     /// Call this when the pane is removed from the split tree.
     func closeSurface() {
@@ -65,6 +97,7 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
         }
         if let paneID {
             KytosGhosttyView.viewRegistry.removeValue(forKey: paneID)
+            KytosGhosttyView.childPids.removeValue(forKey: paneID)
         }
     }
 
@@ -73,7 +106,10 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
         if let surface { ghostty_surface_free(surface) }
         NotificationCenter.default.removeObserver(self)
         Task { @MainActor in
-            if let savedPaneID { KytosGhosttyView.viewRegistry.removeValue(forKey: savedPaneID) }
+            if let savedPaneID {
+                KytosGhosttyView.viewRegistry.removeValue(forKey: savedPaneID)
+                KytosGhosttyView.childPids.removeValue(forKey: savedPaneID)
+            }
         }
     }
     
@@ -188,7 +224,8 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
         guard let total = notif.userInfo?["total"] as? UInt64,
               let offset = notif.userInfo?["offset"] as? UInt64,
               let len = notif.userInfo?["len"] as? UInt64 else { return }
-        
+
+        kLog("[Scrollbar] pane=\(paneID?.uuidString.prefix(8) ?? "nil") total=\(total) offset=\(offset) len=\(len)")
         scrollbarState = (total: total, offset: offset, len: len)
         synchronizeScrollView()
     }
@@ -197,6 +234,11 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
 
     func createSurface(context: ghostty_surface_context_e = GHOSTTY_SURFACE_CONTEXT_WINDOW) {
         guard surface == nil else { return }
+
+        // Snapshot child PIDs before surface creation to detect the new child
+        let ourPid = ProcessInfo.processInfo.processIdentifier
+        let childrenBefore = Self.directChildPids(of: ourPid)
+
         surface = KytosGhosttyApp.shared.newSurface(in: self, context: context, workingDirectory: initialPwd)
         if let surface {
             let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
@@ -205,9 +247,40 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
             let fb = convertToBacking(NSRect(origin: .zero, size: contentSize)).size
             ghostty_surface_set_size(surface, UInt32(fb.width), UInt32(fb.height))
             kLog("[Surface] created scale=\(scale) logical=\(contentSize) fb=\(fb)")
+
+            // Detect the new child PID spawned by this surface
+            if let paneID {
+                // Small delay for the child to appear in the process table
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    let childrenAfter = Self.directChildPids(of: ourPid)
+                    let newChildren = childrenAfter.subtracting(childrenBefore)
+                    if let childPid = newChildren.first {
+                        Self.childPids[paneID] = childPid
+                        kLog("[Surface] pane \(paneID.uuidString.prefix(8)) → child pid \(childPid)")
+                    }
+                }
+            }
         } else {
             kLog("[Surface] createSurface FAILED")
         }
+    }
+
+    /// Get direct child PIDs of a process using sysctl.
+    private static func directChildPids(of parentPid: pid_t) -> Set<pid_t> {
+        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size: Int = 0
+        sysctl(&name, UInt32(name.count), nil, &size, nil, 0)
+        let count = size / MemoryLayout<kinfo_proc>.stride
+        var procs = [kinfo_proc](repeating: kinfo_proc(), count: count)
+        sysctl(&name, UInt32(name.count), &procs, &size, nil, 0)
+        let actualCount = size / MemoryLayout<kinfo_proc>.stride
+        var result = Set<pid_t>()
+        for i in 0..<actualCount {
+            if procs[i].kp_eproc.e_ppid == parentPid {
+                result.insert(procs[i].kp_proc.p_pid)
+            }
+        }
+        return result
     }
 
     // MARK: - Layout

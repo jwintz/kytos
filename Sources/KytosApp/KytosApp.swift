@@ -400,6 +400,14 @@ struct KytosApp: App {
                         userInfo: notificationInfo
                     )
                     return nil
+                case 40: // Cmd+K — clear screen and scrollback
+                    if let wid = targetWindowID,
+                       let workspace = KytosAppModel.shared.windows[wid],
+                       let focusedID = workspace.focusedPaneID,
+                       let view = KytosGhosttyView.view(for: focusedID) {
+                        view.clearScreenAndScrollback()
+                    }
+                    return nil
                 default:
                     break
                 }
@@ -627,7 +635,7 @@ struct KytosWindowView: View {
         }
         .task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: .seconds(15))
                 refreshProcessNames(workspace: workspace)
             }
         }
@@ -665,9 +673,10 @@ struct KytosWindowView: View {
     private func doRefreshProcessNames(workspace: KytosWorkspace) {
         lastProcessRefresh = Date()
         let panes = workspace.splitTree.allPanes
+        let childPids = KytosGhosttyView.childPids
         Task {
             let updates = await Task.detached {
-                KytosProcessUtil.detectProcessNames(for: panes)
+                KytosProcessUtil.detectProcessNames(for: panes, knownChildPids: childPids)
             }.value
             for (id, name) in updates {
                 workspace.splitTree.updateProcessName(name, for: id)

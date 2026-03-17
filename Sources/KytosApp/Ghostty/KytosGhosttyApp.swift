@@ -15,13 +15,16 @@ final class KytosGhosttyApp {
     // MARK: - Init
 
     private init() {
-        // 0. Initialize ghostty global state (must be called before any other API)
+        // 0. Install bundled themes to ~/.config/ghostty/themes/ if missing
+        Self.installBundledThemes()
+
+        // 1. Initialize ghostty global state (must be called before any other API)
         guard ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == GHOSTTY_SUCCESS else {
             kLog("[Ghostty] ghostty_init failed")
             return
         }
 
-        // 1. Config
+        // 2. Config
         guard let cfg = ghostty_config_new() else {
             kLog("[Ghostty] ghostty_config_new failed")
             return
@@ -30,7 +33,7 @@ final class KytosGhosttyApp {
         ghostty_config_finalize(cfg)
         config = cfg
 
-        // 2. Runtime config with C callbacks
+        // 3. Runtime config with C callbacks
         var rt = ghostty_runtime_config_s()
         rt.userdata = Unmanaged.passUnretained(self).toOpaque()
         rt.supports_selection_clipboard = false
@@ -41,7 +44,7 @@ final class KytosGhosttyApp {
         rt.write_clipboard_cb = { ud, loc, content, len, confirm in KytosGhosttyApp.writeClipboardCallback(ud, location: loc, content: content, len: len, confirm: confirm) }
         rt.close_surface_cb = { ud, processAlive in KytosGhosttyApp.closeSurfaceCallback(ud, processAlive: processAlive) }
 
-        // 3. Create app
+        // 4. Create app
         guard let ghosttyApp = ghostty_app_new(&rt, cfg) else {
             kLog("[Ghostty] ghostty_app_new failed")
             return
@@ -49,7 +52,7 @@ final class KytosGhosttyApp {
         app = ghosttyApp
         kLog("[Ghostty] App initialized")
 
-        // 4. Observe system appearance for color scheme
+        // 5. Observe system appearance for color scheme
         let appHandle = ghosttyApp
         appearanceObserver = NSApplication.shared.observe(
             \.effectiveAppearance, options: [.new, .initial]
@@ -69,6 +72,38 @@ final class KytosGhosttyApp {
     deinit {
         if let app { ghostty_app_free(app) }
         if let config { ghostty_config_free(config) }
+    }
+
+    // MARK: - Bundled themes
+
+    /// Copies bundled theme files to ~/.config/ghostty/themes/ if they don't already exist.
+    private static func installBundledThemes() {
+        guard let bundledThemesURL = Bundle.main.resourceURL?.appendingPathComponent("themes") else {
+            return
+        }
+        let fm = FileManager.default
+        guard let themeFiles = try? fm.contentsOfDirectory(at: bundledThemesURL, includingPropertiesForKeys: nil) else {
+            return
+        }
+        let destDir = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/ghostty/themes", isDirectory: true)
+        do {
+            try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        } catch {
+            kLog("[Ghostty] Failed to create themes directory: \(error)")
+            return
+        }
+        for file in themeFiles {
+            let dest = destDir.appendingPathComponent(file.lastPathComponent)
+            if !fm.fileExists(atPath: dest.path) {
+                do {
+                    try fm.copyItem(at: file, to: dest)
+                    kLog("[Ghostty] Installed theme: \(file.lastPathComponent)")
+                } catch {
+                    kLog("[Ghostty] Failed to install theme \(file.lastPathComponent): \(error)")
+                }
+            }
+        }
     }
 
     // MARK: - Tick
