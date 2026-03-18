@@ -10,7 +10,7 @@ title: Kytos
 description: A terminal emulator for macOS built on libghostty and KelyphosKit. Ghostty's rendering engine inside an IDE-quality shell — navigator, inspector, utility panels, and a desktop widget.
 links:
   - label: Get Started
-    to: /guide/installation
+    to: /home
     icon: i-lucide-arrow-right
     color: neutral
     size: xl
