@@ -82,7 +82,8 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
         // Reset scrollbar overlay
         scrollbarState = nil
         synchronizeScrollView()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
             guard let self else { return }
             kLog("[ClearScreen] after 500ms: scrollbarState=\(self.scrollbarState.map { "total=\($0.total) offset=\($0.offset) len=\($0.len)" } ?? "nil")")
         }
@@ -102,15 +103,11 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     }
 
     deinit {
-        let savedPaneID = self.paneID
         if let surface { ghostty_surface_free(surface) }
         NotificationCenter.default.removeObserver(self)
-        Task { @MainActor in
-            if let savedPaneID {
-                KytosGhosttyView.viewRegistry.removeValue(forKey: savedPaneID)
-                KytosGhosttyView.childPids.removeValue(forKey: savedPaneID)
-            }
-        }
+        // Registry cleanup is handled by closeSurface() and viewDidMoveToWindow(window==nil).
+        // No Task needed here — avoids TOCTOU race where a stale deinit task
+        // could evict a newly registered view for the same paneID.
     }
     
     override func removeFromSuperview() {
@@ -251,7 +248,8 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
             // Detect the new child PID spawned by this surface
             if let paneID {
                 // Small delay for the child to appear in the process table
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(100))
                     let childrenAfter = Self.directChildPids(of: ourPid)
                     let newChildren = childrenAfter.subtracting(childrenBefore)
                     if let childPid = newChildren.first {
@@ -741,8 +739,8 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
         }
 
         guard let content, !content.isEmpty else { return false }
-        DispatchQueue.main.async {
-            self.insertText(content, replacementRange: NSRange(location: 0, length: 0))
+        Task { @MainActor [weak self] in
+            self?.insertText(content, replacementRange: NSRange(location: 0, length: 0))
         }
         return true
     }

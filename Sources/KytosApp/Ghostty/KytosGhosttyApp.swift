@@ -63,7 +63,7 @@ final class KytosGhosttyApp {
                 ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT
             ghostty_app_set_color_scheme(appHandle, scheme)
             // Also refresh all surfaces so theme changes apply immediately
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 KytosGhosttyApp.shared.refreshAllSurfaces(scheme: scheme)
             }
         }
@@ -194,7 +194,7 @@ final class KytosGhosttyApp {
     private static func wakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
         guard let ud = userdata else { return }
         let app = Unmanaged<KytosGhosttyApp>.fromOpaque(ud).takeUnretainedValue()
-        DispatchQueue.main.async { app.appTick() }
+        Task { @MainActor in app.appTick() }
     }
 
     private static func actionCallback(
@@ -215,7 +215,7 @@ final class KytosGhosttyApp {
         // because the C pointers in `action` may be freed after this callback returns.
         let safeAction = SafeAction(from: action)
 
-        DispatchQueue.main.async {
+        Task { @MainActor in
             KytosGhosttyApp.shared.handleAction(action, sourceView: sourceView, safe: safeAction)
         }
         return true
@@ -414,7 +414,7 @@ final class KytosGhosttyApp {
         }
 
         let str = String(cString: data)
-        DispatchQueue.main.async {
+        Task { @MainActor in
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(str, forType: .string)
         }
@@ -424,7 +424,7 @@ final class KytosGhosttyApp {
         _ userdata: UnsafeMutableRawPointer?,
         processAlive: Bool
     ) {
-        DispatchQueue.main.async {
+        Task { @MainActor in
             var userInfo: [String: Any] = ["processAlive": processAlive]
             if let windowID = KytosAppModel.shared.windowID(for: NSApp.keyWindow) {
                 userInfo["windowID"] = windowID

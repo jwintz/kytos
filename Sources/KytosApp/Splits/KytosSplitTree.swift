@@ -94,6 +94,9 @@ public indirect enum KytosSplitNode: Codable, Sendable {
 // MARK: - Split Tree
 
 @Observable
+/// Thread safety: All runtime access occurs on `@MainActor` (SwiftUI views and view models).
+/// `@unchecked Sendable` is required because `Codable` conformance needs `nonisolated` init,
+/// but the decoded instances are immediately moved to `@MainActor` context.
 public final class KytosSplitTree: Codable, @unchecked Sendable {
     public var root: KytosSplitNode
 
@@ -106,6 +109,12 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
     /// Monotonic counter bumped on metadata changes so views can subscribe
     /// to a lightweight signal rather than the entire tree structure.
     var metadataVersion: UInt64 = 0
+
+    /// Cached allPanes result, invalidated on structural or metadata changes.
+    @ObservationIgnored
+    private var cachedAllPanes: [KytosPane]?
+    @ObservationIgnored
+    private var cachedAllPanesVersion: UInt64 = UInt64.max
 
     private struct PaneMetadata {
         var title: String = ""
@@ -122,8 +131,14 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
         self.init(root: .leaf(pane))
     }
 
+    /// Invalidate cached allPanes on structural changes.
+    private func invalidatePanesCache() {
+        cachedAllPanes = nil
+    }
+
     /// Rebuild the metadata index from the tree structure.
     private func rebuildMetadataIndex() {
+        invalidatePanesCache()
         var newMetadata: [UUID: PaneMetadata] = [:]
         Self.collectMetadata(node: root, into: &newMetadata)
         // Merge existing metadata (preserves runtime-only fields like processName)
@@ -204,7 +219,11 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
     }
 
     /// All leaf panes in the tree, in order, with current metadata merged in.
+    /// Cached — rebuilt only when metadataVersion changes.
     public var allPanes: [KytosPane] {
+        if cachedAllPanesVersion == metadataVersion, let cached = cachedAllPanes {
+            return cached
+        }
         var result: [KytosPane] = []
         Self.collectLeaves(node: root, into: &result)
         // Merge runtime metadata
@@ -215,6 +234,8 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
                 result[i].processName = meta.processName
             }
         }
+        cachedAllPanes = result
+        cachedAllPanesVersion = metadataVersion
         return result
     }
 
@@ -315,6 +336,7 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
     /// Equalize all split ratios to 50%.
     public func equalize() {
         root = Self.equalized(node: root)
+        invalidatePanesCache()
     }
 
     private static func equalized(node: KytosSplitNode) -> KytosSplitNode {

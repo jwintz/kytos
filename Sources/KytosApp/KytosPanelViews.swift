@@ -3,6 +3,7 @@
 import SwiftUI
 import Foundation
 import GhosttyKit
+import os
 
 // MARK: - Sessions Sidebar
 
@@ -403,9 +404,12 @@ struct KytosProcessInfoView: View {
         .onChange(of: workspace.focusedPaneID) { _, _ in
             Task { await refresh() }
         }
-        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
-            guard isVisible else { return }
-            Task { await refresh() }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard isVisible else { continue }
+                await refresh()
+            }
         }
     }
 
@@ -656,6 +660,11 @@ struct SystemStats {
     let memoryUsage: Double
 }
 
+private struct CPUPrevious: Sendable {
+    var user: Double = 0; var system: Double = 0; var idle: Double = 0; var nice: Double = 0
+}
+private let cpuPrevious = OSAllocatedUnfairLock(initialState: CPUPrevious())
+
 extension KytosProcessInfoView {
     nonisolated static func systemStats() -> SystemStats? {
         let cpu = systemCPU()
@@ -678,13 +687,13 @@ extension KytosProcessInfoView {
         let idle = Double(loadInfo.cpu_ticks.2)
         let nice = Double(loadInfo.cpu_ticks.3)
 
-        struct Previous { nonisolated(unsafe) static var user = 0.0; nonisolated(unsafe) static var system = 0.0; nonisolated(unsafe) static var idle = 0.0; nonisolated(unsafe) static var nice = 0.0 }
-        let dUser = user - Previous.user
-        let dSystem = system - Previous.system
-        let dIdle = idle - Previous.idle
-        let dNice = nice - Previous.nice
+        let prev = cpuPrevious.withLock { $0 }
+        let dUser = user - prev.user
+        let dSystem = system - prev.system
+        let dIdle = idle - prev.idle
+        let dNice = nice - prev.nice
         let dTotal = dUser + dSystem + dIdle + dNice
-        Previous.user = user; Previous.system = system; Previous.idle = idle; Previous.nice = nice
+        cpuPrevious.withLock { $0 = CPUPrevious(user: user, system: system, idle: idle, nice: nice) }
 
         guard dTotal > 0 else { return 0 }
         return (dUser + dSystem + dNice) / dTotal
@@ -721,6 +730,7 @@ final class KytosProcessMonitor {
     @ObservationIgnored private weak var targetView: KytosGhosttyView?
     @ObservationIgnored private var prevCPUTime: UInt64 = 0
     @ObservationIgnored private var prevSampleTime: CFAbsoluteTime = 0
+    @ObservationIgnored private var pollTask: Task<Void, Never>?
 
     init() {}
 
@@ -743,14 +753,18 @@ final class KytosProcessMonitor {
     private func startPolling() {
         pollOnce()
         let interval = KytosSettings.shared.inspectorRefreshInterval
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
+        let t = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
             Task { @MainActor [weak self] in self?.pollOnce() }
         }
+        t.tolerance = interval * 0.2 // Allow system to coalesce wakeups
+        timer = t
     }
 
     private func stopPolling() {
         timer?.invalidate()
         timer = nil
+        pollTask?.cancel()
+        pollTask = nil
     }
 
     func updateInterval() {
@@ -768,7 +782,8 @@ final class KytosProcessMonitor {
         let capturedPrevCPU = prevCPUTime
         let capturedPrevTime = prevSampleTime
 
-        Task.detached {
+        pollTask?.cancel()
+        pollTask = Task.detached {
             let snapshot = KytosProcessUtil.psSnapshot()
             let children = KytosProcessUtil.findAllChildren(of: ourPid, in: snapshot)
             let shellPid = children.first ?? ourPid

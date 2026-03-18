@@ -1,4 +1,3 @@
-import SwiftUI
 import Observation
 import AppKit
 
@@ -13,16 +12,30 @@ public final class KytosSettings {
     private let inspectorRefreshKey = "kytos_inspectorRefreshInterval"
     private let focusFollowsMouseKey = "kytos_focusFollowsMouse"
 
+    @ObservationIgnored private var saveWorkItem: DispatchWorkItem?
+
     public var horizontalMargin: CGFloat {
-        didSet { UserDefaults.standard.set(horizontalMargin, forKey: horizontalMarginKey) }
+        didSet { scheduleSave() }
     }
 
     public var inspectorRefreshInterval: TimeInterval {
-        didSet { UserDefaults.standard.set(inspectorRefreshInterval, forKey: inspectorRefreshKey) }
+        didSet { scheduleSave() }
     }
 
     public var focusFollowsMouse: Bool {
-        didSet { UserDefaults.standard.set(focusFollowsMouse, forKey: focusFollowsMouseKey) }
+        didSet { scheduleSave() }
+    }
+
+    private func scheduleSave() {
+        saveWorkItem?.cancel()
+        saveWorkItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let defaults = UserDefaults.standard
+            defaults.set(self.horizontalMargin, forKey: self.horizontalMarginKey)
+            defaults.set(self.inspectorRefreshInterval, forKey: self.inspectorRefreshKey)
+            defaults.set(self.focusFollowsMouse, forKey: self.focusFollowsMouseKey)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: saveWorkItem!)
     }
 
     private init() {

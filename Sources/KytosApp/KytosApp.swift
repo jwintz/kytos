@@ -472,6 +472,7 @@ struct KytosWindowView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var windowShellState: KelyphosShellState
     @State private var keybindingRegistry: KelyphosKeybindingRegistry
+    @State private var windowCloseObserver: NSObjectProtocol?
     var appModel: KytosAppModel
 
     init(windowID: Binding<UUID?>, appModel: KytosAppModel) {
@@ -539,17 +540,19 @@ struct KytosWindowView: View {
             }
             if windowID == nil { windowID = stableID }
 
-            // Remove workspace when NSWindow closes
-            let id = stableID
-            NotificationCenter.default.addObserver(
-                forName: NSWindow.willCloseNotification, object: nil, queue: .main
-            ) { notification in
-                guard !appModel.isTerminating else { return }
-                guard let window = notification.object as? NSWindow,
-                      !(window is NSPanel),
-                      appModel.windowToID[ObjectIdentifier(window)] == id else { return }
-                appModel.windows.removeValue(forKey: id)
-                appModel.save()
+            // Remove workspace when NSWindow closes (store token for cleanup)
+            if windowCloseObserver == nil {
+                let id = stableID
+                windowCloseObserver = NotificationCenter.default.addObserver(
+                    forName: NSWindow.willCloseNotification, object: nil, queue: .main
+                ) { notification in
+                    guard !appModel.isTerminating else { return }
+                    guard let window = notification.object as? NSWindow,
+                          !(window is NSPanel),
+                          appModel.windowToID[ObjectIdentifier(window)] == id else { return }
+                    appModel.windows.removeValue(forKey: id)
+                    appModel.save()
+                }
             }
 
             // Let AppKit/SwiftUI restore whatever native tabs/windows it can first,
@@ -573,6 +576,18 @@ struct KytosWindowView: View {
                 focusCurrentPane(in: ws)
             }
             // Keybindings are configured in init via keybindingRegistry
+        }
+        .onDisappear {
+            if let observer = windowCloseObserver {
+                NotificationCenter.default.removeObserver(observer)
+                windowCloseObserver = nil
+            }
+            // Remove workspace here — onDisappear fires before willCloseNotification,
+            // so the notification observer is already gone by the time the window closes.
+            if !appModel.isTerminating {
+                appModel.windows.removeValue(forKey: stableID)
+                appModel.save()
+            }
         }
     }
 
@@ -661,7 +676,8 @@ struct KytosWindowView: View {
             // Throttle: schedule a deferred refresh if not already pending
             guard !processRefreshScheduled else { return }
             processRefreshScheduled = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + (2.0 - elapsed)) { [self] in
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2.0 - elapsed))
                 processRefreshScheduled = false
                 doRefreshProcessNames(workspace: workspace)
             }

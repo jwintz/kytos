@@ -109,12 +109,15 @@ targets:
     sources:
       - path: Sources/KytosTests
     dependencies:
+      - target: Kytos-macOS
       - framework: Frameworks/GhosttyKit.xcframework
         embed: false
     settings:
       PRODUCT_NAME: KytosTests
       PRODUCT_BUNDLE_IDENTIFIER: me.jwintz.KytosTests
       GENERATE_INFOPLIST_FILE: YES
+      TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Kytos.app/Contents/MacOS/Kytos"
+      BUNDLE_LOADER: "$(TEST_HOST)"
 
 schemes:
   Kytos-macOS:

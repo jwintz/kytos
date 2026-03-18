@@ -96,12 +96,20 @@ public final class KytosAppModel {
     @ObservationIgnored private var widgetRefreshTimer: Timer?
 
     private func startWidgetRefreshTimer() {
-        widgetRefreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
+        let timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in
                 self?.writeWidgetSnapshot()
             }
         }
+        timer.tolerance = 6 // 20% of 30s — allows system to coalesce wakeups
+        widgetRefreshTimer = timer
     }
+
+    func stopWidgetRefreshTimer() {
+        widgetRefreshTimer?.invalidate()
+        widgetRefreshTimer = nil
+    }
+
 
     /// Set of windowIDs that have been claimed by live windows in this session.
     @ObservationIgnored private var claimedWindowIDs: Set<UUID> = []
@@ -140,8 +148,7 @@ public final class KytosAppModel {
             return existing
         }
         kLog("[KytosDebug][AppModel] workspace(for: \(windowID.uuidString.prefix(8))) — no exact match")
-        let unclaimed = windows.filter { !claimedWindowIDs.contains($0.key) }
-        if let (oldKey, existing) = unclaimed.first {
+        if let (oldKey, existing) = windows.first(where: { !claimedWindowIDs.contains($0.key) }) {
             kLog("[KytosDebug][AppModel]   → remapping \(oldKey.uuidString.prefix(8)) → \(windowID.uuidString.prefix(8))")
             restoredWindowIDRemap[oldKey] = windowID
             Self.migratePanelDefaults(from: oldKey, to: windowID)
