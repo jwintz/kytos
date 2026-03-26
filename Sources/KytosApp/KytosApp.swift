@@ -454,6 +454,7 @@ struct KytosApp: App {
         Settings {
             KytosSettingsWindowView(shellState: settingsShellState)
         }
+        KelyphosAboutScene(title: "Kytos")
     }
 
     private var mainWindowGroup: some Scene {
