@@ -601,6 +601,11 @@ struct KytosWindowView: View {
                 inspectorTabs: KytosInspectorTab.allCases,
                 utilityTabs: KytosUtilityTab.allCases,
                 scrollable: false,
+                settingsView: { [windowShellState] in
+                    AnyView(
+                        KytosSettingsWindowView(shellState: windowShellState)
+                    )
+                },
                 detail: {
                     PaneWorkspaceView(windowID: stableID)
                 }

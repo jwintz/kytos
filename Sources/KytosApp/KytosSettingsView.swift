@@ -11,7 +11,9 @@ struct KytosSettingsWindowView: View {
             KelyphosSettingsView(state: shellState)
                 .tabItem { Label("Appearance", systemImage: "paintbrush") }
         }
+        #if os(macOS)
         .frame(width: 450)
+        #endif
     }
 }
 
