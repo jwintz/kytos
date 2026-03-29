@@ -112,6 +112,7 @@ struct PaneWorkspaceView: View {
     @State private var searchState = KytosSearchState()
     @State private var settings = KytosSettings.shared
     @State private var splitTreeSize: CGSize = .zero
+    @State private var notificationRouter: PaneNotificationRouter?
 
     var body: some View {
         @Bindable var ws = workspace
@@ -140,170 +141,16 @@ struct PaneWorkspaceView: View {
             KytosSearchBar(state: searchState)
                 .padding(.trailing, settings.horizontalMargin)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttySetTitle"))) { notif in
-            guard notificationTargetsCurrentWindow(notif) else { return }
-            guard let title = notif.userInfo?["title"] as? String, !title.isEmpty else { return }
-            if let sourceView = notif.object as? KytosGhosttyView,
-               let paneID = sourceView.paneID {
-                workspace.splitTree.updateTitle(title, for: paneID)
-            } else {
-                let targetID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
-                workspace.splitTree.updateTitle(title, for: targetID)
+        .onAppear {
+            if notificationRouter == nil {
+                notificationRouter = PaneNotificationRouter(
+                    windowID: windowID,
+                    workspace: workspace,
+                    searchState: searchState,
+                    splitTreeSizeProvider: { splitTreeSize }
+                )
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyPwd"))) { notif in
-            guard notificationTargetsCurrentWindow(notif) else { return }
-            guard let pwd = notif.userInfo?["pwd"] as? String else { return }
-            if let sourceView = notif.object as? KytosGhosttyView,
-               let paneID = sourceView.paneID {
-                workspace.splitTree.updatePwd(pwd, for: paneID)
-            } else {
-                let targetID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
-                workspace.splitTree.updatePwd(pwd, for: targetID)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyNewSplit"))) { notif in
-            guard notificationTargetsCurrentWindow(notif) else { return }
-            guard let direction = notif.userInfo?["direction"] as? KytosSplitDirection else { return }
-            let targetPaneID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
-            let newPane = KytosPane()
-            workspace.splitTree.split(at: targetPaneID, direction: direction, newPane: newPane)
-            workspace.focusedPaneID = newPane.id
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyGotoSplit"))) { notif in
-            guard notificationTargetsCurrentWindow(notif) else { return }
-            guard let currentID = workspace.focusedPaneID else { return }
-            let panes = workspace.splitTree.allPanes
-            guard panes.count > 1 else { return }
-            guard let idx = panes.firstIndex(where: { $0.id == currentID }) else { return }
-
-            // Extract direction — try UInt32 first (raw enum value), then Int
-            let rawDir: UInt32
-            if let r = notif.userInfo?["direction"] as? UInt32 {
-                rawDir = r
-            } else if let r = notif.userInfo?["direction"] as? Int {
-                rawDir = UInt32(r)
-            } else {
-                kLog("[GotoSplit] No direction in notification")
-                return
-            }
-
-            kLog("[GotoSplit] rawDir=\(rawDir) LEFT=\(GHOSTTY_GOTO_SPLIT_LEFT.rawValue) RIGHT=\(GHOSTTY_GOTO_SPLIT_RIGHT.rawValue) UP=\(GHOSTTY_GOTO_SPLIT_UP.rawValue) DOWN=\(GHOSTTY_GOTO_SPLIT_DOWN.rawValue) NEXT=\(GHOSTTY_GOTO_SPLIT_NEXT.rawValue) PREV=\(GHOSTTY_GOTO_SPLIT_PREVIOUS.rawValue)")
-
-            // Map ghostty direction to spatial or sequential
-            let spatialDir: KytosSplitTree.SpatialDirection?
-            let forward: Bool?
-            switch rawDir {
-            case GHOSTTY_GOTO_SPLIT_LEFT.rawValue:  spatialDir = .left;  forward = nil
-            case GHOSTTY_GOTO_SPLIT_RIGHT.rawValue: spatialDir = .right; forward = nil
-            case GHOSTTY_GOTO_SPLIT_UP.rawValue:    spatialDir = .up;    forward = nil
-            case GHOSTTY_GOTO_SPLIT_DOWN.rawValue:  spatialDir = .down;  forward = nil
-            case GHOSTTY_GOTO_SPLIT_NEXT.rawValue:  spatialDir = nil;    forward = true
-            case GHOSTTY_GOTO_SPLIT_PREVIOUS.rawValue: spatialDir = nil; forward = false
-            default:
-                // Fallback: treat as sequential next
-                kLog("[GotoSplit] Unknown direction \(rawDir), falling back to next")
-                let nextIdx = (idx + 1) % panes.count
-                workspace.focusedPaneID = panes[nextIdx].id
-                return
-            }
-
-            if let spatialDir {
-                let bounds = CGRect(origin: .zero, size: splitTreeSize)
-                let slots = workspace.splitTree.spatialSlots(in: bounds)
-                kLog("[GotoSplit] spatial=\(spatialDir) bounds=\(bounds) slots=\(slots.map { "\($0.paneID.uuidString.prefix(4)):\($0.bounds)" })")
-                if let nextID = workspace.splitTree.geometricNeighbor(from: currentID, direction: spatialDir, in: bounds) {
-                    kLog("[GotoSplit] → neighbor \(nextID.uuidString.prefix(4))")
-                    workspace.focusedPaneID = nextID
-                } else {
-                    // Fallback to sequential if geometric lookup fails (e.g. no neighbor in that direction)
-                    let nextIdx: Int
-                    switch spatialDir {
-                    case .right, .down: nextIdx = (idx + 1) % panes.count
-                    case .left, .up:    nextIdx = (idx - 1 + panes.count) % panes.count
-                    }
-                    workspace.focusedPaneID = panes[nextIdx].id
-                }
-            } else if let forward {
-                let nextIdx: Int
-                if forward {
-                    nextIdx = (idx + 1) % panes.count
-                } else {
-                    nextIdx = (idx - 1 + panes.count) % panes.count
-                }
-                workspace.focusedPaneID = panes[nextIdx].id
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyEqualizeSplits"))) { notif in
-            guard notificationTargetsCurrentWindow(notif) else { return }
-            workspace.splitTree.equalize()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyCloseSurface"))) { notif in
-            guard notificationTargetsCurrentWindow(notif) else { return }
-            guard let focusedID = workspace.focusedPaneID else { return }
-            // Don't close the last pane — close the window instead
-            guard workspace.splitTree.isSplit else {
-                KytosAppModel.shared.window(for: windowID)?.performClose(nil)
-                return
-            }
-            // Explicitly close the surface to free the PTY and kill child processes
-            KytosGhosttyView.view(for: focusedID)?.closeSurface()
-            if let newFocusID = workspace.splitTree.remove(paneID: focusedID) {
-                workspace.focusedPaneID = newFocusID
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttySearchTotal"))) { notif in
-            guard notificationTargetsCurrentWindow(notif) else { return }
-            if let total = notif.userInfo?["total"] as? Int {
-                searchState.totalMatches = max(0, total)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttySearchSelected"))) { notif in
-            guard notificationTargetsCurrentWindow(notif) else { return }
-            if let selected = notif.userInfo?["selected"] as? Int {
-                searchState.selectedMatch = max(0, selected)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyStartSearch"))) { notif in
-            guard notificationTargetsCurrentWindow(notif) else { return }
-            searchState.isVisible = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyFocusChanged"))) { notif in
-            guard notificationTargetsCurrentWindow(notif),
-                  let paneID = notif.userInfo?["paneID"] as? UUID else { return }
-            workspace.focusedPaneID = paneID
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosSearchNext"))) { notif in
-            guard notificationTargetsCurrentWindow(notif) else { return }
-            guard searchState.isVisible else { return }
-            searchState.searchNext()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosSearchPrevious"))) { notif in
-            guard notificationTargetsCurrentWindow(notif) else { return }
-            guard searchState.isVisible else { return }
-            searchState.searchPrevious()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosResetFontSize"))) { notif in
-            guard notificationTargetsCurrentWindow(notif) else { return }
-            let focusedID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
-            guard let view = KytosGhosttyView.view(for: focusedID),
-                  let surface = view.surface else { return }
-            let cmd = "reset_font_size"
-            _ = cmd.withCString { ptr in
-                ghostty_surface_binding_action(surface, ptr, UInt(cmd.utf8.count))
-            }
-        }
-    }
-
-    private func notificationTargetsCurrentWindow(_ notification: Notification) -> Bool {
-        if let targetWindowID = notification.userInfo?["windowID"] as? UUID {
-            return targetWindowID == windowID
-        }
-        if let sourceView = notification.object as? KytosGhosttyView,
-           let paneID = sourceView.paneID {
-            return workspace.splitTree.findPane(paneID) != nil
-        }
-        return false
     }
 }
 
@@ -342,6 +189,13 @@ final class KytosAppDelegate: NSObject, NSApplicationDelegate {
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
         true
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        ProcessMonitor.shared.stop()
+        KytosAppModel.shared.stopWidgetRefreshTimer()
+        KytosAppModel.shared.isTerminating = true
+        KytosAppModel.shared.save()
+    }
 }
 
 @main
@@ -349,6 +203,7 @@ struct KytosApp: App {
     @NSApplicationDelegateAdaptor(KytosAppDelegate.self) private var appDelegate
     @Environment(\.kelyphosKeybindingRegistry) private var registry
     @State private var appModel = KytosAppModel.shared
+    nonisolated(unsafe) static var keyMonitor: Any?
     @State private var settingsShellState: KelyphosShellState = {
         KelyphosShellState(persistencePrefix: "me.jwintz.kytos")
     }()
@@ -365,7 +220,7 @@ struct KytosApp: App {
         _ = KytosGhosttyApp.shared
 
         // Keyboard shortcuts — Cmd+W close current split, font size
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        KytosApp.keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             let targetWindow = event.window ?? NSApp.keyWindow
             let targetWindowID = KytosAppModel.shared.windowID(for: targetWindow)
@@ -426,15 +281,6 @@ struct KytosApp: App {
                 }
             }
             return event
-        }
-
-        // Save state on quit
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification,
-            object: nil, queue: .main
-        ) { _ in
-            KytosAppModel.shared.isTerminating = true
-            KytosAppModel.shared.save()
         }
 
         signal(SIGTERM) { _ in
@@ -628,7 +474,7 @@ struct KytosWindowView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttySetTitle"))) { notif in
             guard notificationTargetsCurrentWindow(notif) else { return }
             // SET_TITLE fires on preexec (command launch) and precmd (prompt return)
-            refreshProcessNames(workspace: workspace)
+            ProcessMonitor.shared.requestRefresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyPwd"))) { notif in
             guard notificationTargetsCurrentWindow(notif) else { return }
@@ -640,10 +486,10 @@ struct KytosWindowView: View {
                     windowShellState.subtitle = pwd.isEmpty ? "" : abbreviatePath(pwd)
                 }
             }
-            refreshProcessNames(workspace: workspace)
+            ProcessMonitor.shared.requestRefresh()
         }
         .onChange(of: workspace.focusedPaneID) { _, _ in
-            refreshProcessNames(workspace: workspace)
+            ProcessMonitor.shared.requestRefresh()
             focusCurrentPane(in: workspace)
         }
         .onReceive(
@@ -655,10 +501,10 @@ struct KytosWindowView: View {
             focusCurrentPane(in: workspace)
         }
         .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(15))
-                refreshProcessNames(workspace: workspace)
-            }
+            ProcessMonitor.shared.start()
+        }
+        .onChange(of: ProcessMonitor.shared.snapshotVersion) { _, _ in
+            updateToolbar(workspace: workspace)
         }
         .onChange(of: windowShellState.navigatorVisible) { _, _ in
             windowShellState.savePanelState()
@@ -668,46 +514,6 @@ struct KytosWindowView: View {
         }
         .onChange(of: windowShellState.utilityAreaVisible) { _, _ in
             windowShellState.savePanelState()
-        }
-    }
-
-    /// Throttle process name detection — at most once per 2 seconds.
-    @State private var lastProcessRefresh: Date = .distantPast
-    @State private var processRefreshScheduled = false
-
-    private func refreshProcessNames(workspace: KytosWorkspace) {
-        let now = Date()
-        let elapsed = now.timeIntervalSince(lastProcessRefresh)
-        if elapsed < 2.0 {
-            // Throttle: schedule a deferred refresh if not already pending
-            guard !processRefreshScheduled else { return }
-            processRefreshScheduled = true
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(2.0 - elapsed))
-                processRefreshScheduled = false
-                doRefreshProcessNames(workspace: workspace)
-            }
-            return
-        }
-        doRefreshProcessNames(workspace: workspace)
-    }
-
-    private func doRefreshProcessNames(workspace: KytosWorkspace) {
-        lastProcessRefresh = Date()
-        let panes = workspace.splitTree.allPanes
-        let childPids = KytosGhosttyView.childPids
-        Task {
-            let updates = await Task.detached {
-                KytosProcessUtil.detectProcessNames(for: panes, knownChildPids: childPids)
-            }.value
-            for (id, name) in updates {
-                workspace.splitTree.updateProcessName(name, for: id)
-            }
-            updateToolbar(workspace: workspace)
-            NotificationCenter.default.post(
-                name: NSNotification.Name("KytosProcessNamesUpdated"),
-                object: nil
-            )
         }
     }
 

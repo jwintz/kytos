@@ -36,10 +36,15 @@ distclean = "rm -rf .build Kytos.xcodeproj DerivedData build && xcodebuild -allt
 # Build if needed, register widget, launch app.
 run = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); LSREGISTER=\"/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister\"; \"$LSREGISTER\" -f \"$BUILT/Kytos.app\" 2>/dev/null || true; WIDGET=\"$BUILT/Kytos.app/Contents/PlugIns/KytosWidget.appex\"; if [ -d \"$WIDGET\" ]; then pluginkit -r \"$WIDGET\" 2>/dev/null || true; pluginkit -a \"$WIDGET\" 2>/dev/null || true; fi; open -W \"$BUILT/Kytos.app\"'", depends-on = ["build-if-needed"] }
 
+# Build Release, register widget, launch app.
+run-release = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); LSREGISTER=\"/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister\"; \"$LSREGISTER\" -f \"$BUILT/Kytos.app\" 2>/dev/null || true; WIDGET=\"$BUILT/Kytos.app/Contents/PlugIns/KytosWidget.appex\"; if [ -d \"$WIDGET\" ]; then pluginkit -r \"$WIDGET\" 2>/dev/null || true; pluginkit -a \"$WIDGET\" 2>/dev/null || true; fi; open -W \"$BUILT/Kytos.app\"'", depends-on = ["build-release-if-needed"] }
+
 # -- Release packaging tasks --
 
-# Build Release configuration via xcodebuild.
+# Build Release configuration via xcodebuild (always rebuilds GhosttyKit).
 build-release = { cmd = "bash -c 'BUILD_VERSION=$(date +%s); xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release build -allowProvisioningUpdates ARCHS=arm64 CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO CURRENT_PROJECT_VERSION=\"$BUILD_VERSION\"'", depends-on = ["build-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
+# Build Release only when sources are newer than the built binary (reuses existing GhosttyKit).
+build-release-if-needed = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); BIN=\"$BUILT/Kytos.app/Contents/MacOS/Kytos\"; if [ -f \"$BIN\" ] && [ -z \"$(find Sources Frameworks project.yml Kytos.xcodeproj/project.pbxproj -newer \"$BIN\" 2>/dev/null | head -1)\" ]; then echo \"Release build up to date.\"; else BUILD_VERSION=$(date +%s); xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release build -allowProvisioningUpdates ARCHS=arm64 CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO CURRENT_PROJECT_VERSION=\"$BUILD_VERSION\"; fi'", depends-on = ["ensure-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
 
 # Assemble the .app bundle from the Release build output.
 # xcodebuild already produces a full Kytos.app (with widget appex bundled

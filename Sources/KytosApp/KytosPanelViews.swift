@@ -404,12 +404,9 @@ struct KytosProcessInfoView: View {
         .onChange(of: workspace.focusedPaneID) { _, _ in
             Task { await refresh() }
         }
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(10))
-                guard isVisible else { continue }
-                await refresh()
-            }
+        .onChange(of: ProcessMonitor.shared.snapshotVersion) { _, _ in
+            guard isVisible else { return }
+            Task { await refresh() }
         }
     }
 
@@ -542,9 +539,11 @@ struct KytosProcessInfoView: View {
         let focusedPane = workspace.splitTree.findPane(focusedPaneID) ?? workspace.splitTree.firstLeaf
         let panes = workspace.splitTree.allPanes
         let ourPid = Foundation.ProcessInfo.processInfo.processIdentifier
+        let cachedSnapshot = ProcessMonitor.shared.latestSnapshot
 
         let result = await Task.detached { () -> ([ProcessEntry], SystemStats?, pid_t) in
-            let snapshot = KytosProcessUtil.psSnapshot()
+            // Reuse the shared snapshot when available, otherwise fall back to a fresh one
+            let snapshot = cachedSnapshot.isEmpty ? KytosProcessUtil.psSnapshot() : cachedSnapshot
             let shells = KytosProcessUtil.findShells(snapshot: snapshot)
             let matched = KytosProcessUtil.matchShell(for: focusedPane, from: shells, excluding: [])
             let resolvedShellPid = matched ?? shells.first?.shellPid ?? ourPid

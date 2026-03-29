@@ -1,5 +1,6 @@
 import AppKit
 import GhosttyKit
+import QuartzCore
 
 /// NSView subclass wrapping a `ghostty_surface_t`. Handles Metal layer setup,
 /// keyboard/mouse forwarding, and IME via NSTextInputClient.
@@ -10,6 +11,10 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     private var keyTextAccumulator: [String]?
     /// Cached content size in logical points for re-use on backing changes.
     private var contentSize: CGSize = .zero
+    /// Last content scale sent to ghostty — skip redundant calls.
+    private var lastContentScale: (CGFloat, CGFloat) = (0, 0)
+    /// Last surface size sent to ghostty — skip redundant calls.
+    private var lastSurfaceSize: (UInt32, UInt32) = (0, 0)
 
     /// Published surface title — updated via SET_TITLE action.
     var title: String = ""
@@ -29,6 +34,12 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     private var scrollbarState: (total: UInt64, offset: UInt64, len: UInt64)?
     private var cellHeight: CGFloat = 0
     private var scrollObservers: [NSObjectProtocol] = []
+    
+    // Throttle state for reflectScrolledClipView — caps overlay scroller
+    // flash animations to prevent transient CALayer buildup during rapid output.
+    private var scrollReflectPending = false
+    private var lastScrollReflectTime: CFTimeInterval = 0
+    private static let scrollReflectMinInterval: CFTimeInterval = 1.0 / 15.0
 
     // MARK: - View Registry
 
@@ -111,25 +122,45 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
     }
     
     override func removeFromSuperview() {
+        detachScrollerToPool()
+        super.removeFromSuperview()
+    }
+    
+    /// Return the scroll view to the reuse pool, cleaning up observers.
+    private func detachScrollerToPool() {
         for obs in scrollObservers { NotificationCenter.default.removeObserver(obs) }
         scrollObservers.removeAll()
-        super.removeFromSuperview()
+        guard let sv = scrollView else { return }
+        scrollView = nil
+        scrollDocumentView = nil
+        scrollbarState = nil
+        isLiveScrolling = false
+        lastSentRow = nil
+        scrollReflectPending = false
+        ScrollViewPool.release(sv)
     }
 
     // MARK: - Scroller (NSScrollView overlay, like ghostty's SurfaceScrollView)
     
     private func setupScroller() {
-        let sv = KytosPassthroughScrollView()
-        sv.hasVerticalScroller = true
-        sv.hasHorizontalScroller = false
-        sv.autohidesScrollers = false
-        sv.scrollerStyle = .overlay
-        sv.drawsBackground = false
-        sv.contentView.clipsToBounds = false
+        let sv: KytosPassthroughScrollView
+        if let pooled = ScrollViewPool.acquire() {
+            sv = pooled
+        } else {
+            sv = KytosPassthroughScrollView()
+            sv.hasVerticalScroller = true
+            sv.hasHorizontalScroller = false
+            sv.autohidesScrollers = false
+            sv.scrollerStyle = .overlay
+            sv.drawsBackground = false
+            sv.contentView.clipsToBounds = false
+            sv.layerContentsRedrawPolicy = .onSetNeedsDisplay
+            
+            let doc = NSView(frame: NSRect(origin: .zero, size: bounds.size))
+            sv.documentView = doc
+        }
         
-        let doc = NSView(frame: NSRect(origin: .zero, size: bounds.size))
-        sv.documentView = doc
-        self.scrollDocumentView = doc
+        self.scrollDocumentView = sv.documentView
         
         sv.frame = bounds
         sv.autoresizingMask = [.width, .height]
@@ -180,13 +211,33 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
         doc.frame.size.width = sv.bounds.width
         
         if !isLiveScrolling, cellHeight > 0, let sb = scrollbarState {
-            // Invert: terminal offset is from top, AppKit position from bottom
+            // Suppress implicit layer animations during position updates
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
             let offsetY = CGFloat(sb.total - sb.offset - sb.len) * cellHeight
             sv.contentView.scroll(to: CGPoint(x: 0, y: offsetY))
             lastSentRow = Int(sb.offset)
+            CATransaction.commit()
         }
         
-        sv.reflectScrolledClipView(sv.contentView)
+        // Throttle reflectScrolledClipView to cap overlay scroller layer animations.
+        // During rapid output (e.g. cat large_file), scrollbar updates fire at
+        // display refresh rate, each triggering a scroller flash with transient
+        // CALayers. Capping at 15 Hz reduces layer count significantly.
+        let now = CACurrentMediaTime()
+        if now - lastScrollReflectTime >= Self.scrollReflectMinInterval {
+            lastScrollReflectTime = now
+            sv.reflectScrolledClipView(sv.contentView)
+        } else if !scrollReflectPending {
+            scrollReflectPending = true
+            let interval = Self.scrollReflectMinInterval
+            DispatchQueue.main.asyncAfter(deadline: .now() + interval) { [weak self] in
+                guard let self, let sv = self.scrollView else { return }
+                self.scrollReflectPending = false
+                self.lastScrollReflectTime = CACurrentMediaTime()
+                sv.reflectScrolledClipView(sv.contentView)
+            }
+        }
     }
     
     /// Handle user dragging the scrollbar — convert pixel position to row number
@@ -318,12 +369,20 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
         let fbFrame = convertToBacking(frame)
         let xScale = fbFrame.size.width / frame.size.width
         let yScale = fbFrame.size.height / frame.size.height
-        ghostty_surface_set_content_scale(surface, xScale, yScale)
+        if xScale != lastContentScale.0 || yScale != lastContentScale.1 {
+            lastContentScale = (xScale, yScale)
+            ghostty_surface_set_content_scale(surface, xScale, yScale)
+        }
 
         // When scale factor changes, fb size changes too
         let scaledSize = convertToBacking(NSRect(origin: .zero, size: contentSize)).size
         if scaledSize.width > 0, scaledSize.height > 0 {
-            ghostty_surface_set_size(surface, UInt32(scaledSize.width), UInt32(scaledSize.height))
+            let w = UInt32(scaledSize.width)
+            let h = UInt32(scaledSize.height)
+            if w != lastSurfaceSize.0 || h != lastSurfaceSize.1 {
+                lastSurfaceSize = (w, h)
+                ghostty_surface_set_size(surface, w, h)
+            }
         }
     }
 
@@ -781,6 +840,29 @@ final class KytosGhosttyView: NSView, @preconcurrency NSTextInputClient {
             }
         }
         return keyEvent
+    }
+}
+
+// MARK: - Scroll View Pool
+
+/// Reusable pool for overlay scroll view instances.
+/// Avoids repeated WindowServer layer registration/deregistration when
+/// split panes are opened and closed. Each overlay NSScrollView creates
+/// multiple CALayers (clip view, scroller knob, scroller track); pooling
+/// keeps those layers alive and re-parents them instead of rebuilding.
+@MainActor
+private enum ScrollViewPool {
+    private static var pool: [KytosPassthroughScrollView] = []
+    private static let maxSize = 4
+    
+    static func acquire() -> KytosPassthroughScrollView? {
+        pool.popLast()
+    }
+    
+    static func release(_ sv: KytosPassthroughScrollView) {
+        sv.removeFromSuperview()
+        guard pool.count < maxSize else { return }
+        pool.append(sv)
     }
 }
 
