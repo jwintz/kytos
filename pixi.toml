@@ -24,7 +24,10 @@ generate = "swift run xcodegen generate --spec project.yml"
 generate-if-needed = "bash -c 'test Kytos.xcodeproj/project.pbxproj -nt project.yml || swift run xcodegen generate --spec project.yml'"
 
 # Always build (use for forced rebuild).
-build = { cmd = "bash -c 'BUILD_VERSION=$(date +%s); xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates CURRENT_PROJECT_VERSION=\"$BUILD_VERSION\"'", depends-on = ["build-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
+# NOTE: depends on ensure-ghostty (not build-ghostty) to work around
+# Zig linker bug on macOS 26 + Xcode 26.4 SDK (codeberg.org/ziglang/zig/issues/31669).
+# Use `pixi run build-ghostty` explicitly to rebuild GhosttyKit when the Zig fix lands.
+build = { cmd = "bash -c 'BUILD_VERSION=$(date +%s); xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates CURRENT_PROJECT_VERSION=\"$BUILD_VERSION\"'", depends-on = ["ensure-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
 # Build only when sources, project, or submodules are newer than the built binary.
 build-if-needed = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); BIN=\"$BUILT/Kytos.app/Contents/MacOS/Kytos\"; if [ -f \"$BIN\" ] && [ -z \"$(find Sources Frameworks project.yml Kytos.xcodeproj/project.pbxproj -newer \"$BIN\" 2>/dev/null | head -1)\" ]; then echo \"Build up to date.\"; else BUILD_VERSION=$(date +%s); xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Debug build -allowProvisioningUpdates CURRENT_PROJECT_VERSION=\"$BUILD_VERSION\"; fi'", depends-on = ["ensure-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
 # Run unit tests.
@@ -41,8 +44,10 @@ run-release = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -sch
 
 # -- Release packaging tasks --
 
-# Build Release configuration via xcodebuild (always rebuilds GhosttyKit).
-build-release = { cmd = "bash -c 'BUILD_VERSION=$(date +%s); xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release build -allowProvisioningUpdates ARCHS=arm64 CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO CURRENT_PROJECT_VERSION=\"$BUILD_VERSION\"'", depends-on = ["build-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
+# Build Release configuration via xcodebuild.
+# NOTE: depends on ensure-ghostty (not build-ghostty) to work around
+# Zig linker bug on macOS 26 + Xcode 26.4 SDK (codeberg.org/ziglang/zig/issues/31669).
+build-release = { cmd = "bash -c 'BUILD_VERSION=$(date +%s); xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release build -allowProvisioningUpdates ARCHS=arm64 CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO CURRENT_PROJECT_VERSION=\"$BUILD_VERSION\"'", depends-on = ["ensure-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
 # Build Release only when sources are newer than the built binary (reuses existing GhosttyKit).
 build-release-if-needed = { cmd = "bash -c 'BUILT=$(xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR | sed \"s/.*= //\" | head -n 1); BIN=\"$BUILT/Kytos.app/Contents/MacOS/Kytos\"; if [ -f \"$BIN\" ] && [ -z \"$(find Sources Frameworks project.yml Kytos.xcodeproj/project.pbxproj -newer \"$BIN\" 2>/dev/null | head -1)\" ]; then echo \"Release build up to date.\"; else BUILD_VERSION=$(date +%s); xcodebuild -project Kytos.xcodeproj -scheme Kytos-macOS -configuration Release build -allowProvisioningUpdates ARCHS=arm64 CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO CURRENT_PROJECT_VERSION=\"$BUILD_VERSION\"; fi'", depends-on = ["ensure-ghostty", "generate-if-needed"], env = { SDKROOT = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" } }
 
