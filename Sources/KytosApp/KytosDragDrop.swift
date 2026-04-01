@@ -59,7 +59,7 @@ struct KytosDraggingPaneKey: PreferenceKey {
     }
 }
 
-// MARK: - NSView-based Drag Source (matches Ghostty's SurfaceDragSourceView pattern)
+// MARK: - NSView-based Drag Source
 
 @MainActor
 final class KytosPaneDragSourceView: NSView, NSDraggingSource {

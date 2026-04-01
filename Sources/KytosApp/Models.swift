@@ -3,7 +3,7 @@ import AppKit
 import UniformTypeIdentifiers
 import WidgetKit
 
-/// A single terminal session — holds a UUID that maps to a ghostty surface.
+/// A single terminal session — holds a UUID that maps to a terminal surface.
 public struct KytosSession: Identifiable, Codable, Hashable {
     public var id: UUID
     public var name: String

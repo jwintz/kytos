@@ -83,7 +83,7 @@ struct TerminalView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            KytosTerminalRepresentable(terminalID: terminalID, initialPwd: initialPwd)
+            KytosTerminalRepresentable(terminalID: terminalID, initialPwd: initialPwd, fontFamily: settings.fontFamily, fontSize: settings.fontSize, cursorShape: settings.cursorShape)
                 .padding(.horizontal, settings.horizontalMargin)
                 .background(Color.clear)
             
@@ -91,8 +91,8 @@ struct TerminalView: View {
                 KytosProgressBar(state: progressState, progress: progressPercent)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyProgressReport"))) { notif in
-            guard let view = notif.object as? KytosGhosttyView,
+        .onReceive(NotificationCenter.default.publisher(for: .kytosTerminalProgressReport)) { notif in
+            guard let view = notif.object as? KytosTerminalView,
                   view.paneID == terminalID else { return }
             if let state = notif.userInfo?["state"] as? UInt32 {
                 progressState = state
@@ -182,8 +182,6 @@ func kLog(_ msg: @autoclosure () -> String) {}
 
 // MARK: - App Entry Point
 
-import GhosttyKit
-
 @MainActor
 final class KytosAppDelegate: NSObject, NSApplicationDelegate {
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
@@ -216,41 +214,53 @@ struct KytosApp: App {
         // Enable native macOS window tabbing
         NSWindow.allowsAutomaticWindowTabbing = true
 
-        // Initialize ghostty app singleton
-        _ = KytosGhosttyApp.shared
-
-        // Keyboard shortcuts — Cmd+W close current split, font size
+        // Keyboard shortcuts — splits, close, search, font size
         KytosApp.keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let baseFlags = flags.subtracting([.numericPad, .function])
             let targetWindow = event.window ?? NSApp.keyWindow
             let targetWindowID = KytosAppModel.shared.windowID(for: targetWindow)
-            let notificationInfo = targetWindowID.map { ["windowID": $0] }
-            if flags == .command {
+            let notificationInfo: [String: Any]? = targetWindowID.map { ["windowID": $0 as Any] }
+            if baseFlags == .command {
                 switch event.keyCode {
+                case 2: // Cmd+D — split horizontal
+                    NotificationCenter.default.post(
+                        name: .kytosTerminalNewSplit,
+                        object: targetWindow,
+                        userInfo: notificationInfo.map { var d = $0; d["direction"] = KytosSplitDirection.horizontal; return d }
+                    )
+                    return nil
                 case 13: // Cmd+W — close current split pane (or window if last pane)
                     NotificationCenter.default.post(
-                        name: NSNotification.Name("KytosGhosttyCloseSurface"),
+                        name: .kytosTerminalCloseSurface,
                         object: targetWindow,
                         userInfo: notificationInfo
                     )
                     return nil
                 case 3: // Cmd+F — toggle scrollback search
                     NotificationCenter.default.post(
-                        name: NSNotification.Name("KytosGhosttyStartSearch"),
+                        name: .kytosTerminalStartSearch,
                         object: targetWindow,
                         userInfo: notificationInfo
                     )
                     return nil
                 case 5: // Cmd+G — next search match
                     NotificationCenter.default.post(
-                        name: NSNotification.Name("KytosSearchNext"),
+                        name: .kytosSearchNext,
                         object: targetWindow,
                         userInfo: notificationInfo
                     )
                     return nil
                 case 15: // Cmd+R — reset font size
                     NotificationCenter.default.post(
-                        name: NSNotification.Name("KytosResetFontSize"),
+                        name: .kytosResetFontSize,
+                        object: targetWindow,
+                        userInfo: notificationInfo
+                    )
+                    return nil
+                case 17: // Cmd+T — new tab
+                    NotificationCenter.default.post(
+                        name: .kytosTerminalNewTab,
                         object: targetWindow,
                         userInfo: notificationInfo
                     )
@@ -259,7 +269,7 @@ struct KytosApp: App {
                     if let wid = targetWindowID,
                        let workspace = KytosAppModel.shared.windows[wid],
                        let focusedID = workspace.focusedPaneID,
-                       let view = KytosGhosttyView.view(for: focusedID) {
+                       let view = KytosTerminalView.view(for: focusedID) {
                         view.clearScreenAndScrollback()
                     }
                     return nil
@@ -267,13 +277,81 @@ struct KytosApp: App {
                     break
                 }
             }
-            if flags == [.command, .shift] {
+            if baseFlags == [.command, .shift] {
                 switch event.keyCode {
+                case 2: // Cmd+Shift+D — split vertical
+                    NotificationCenter.default.post(
+                        name: .kytosTerminalNewSplit,
+                        object: targetWindow,
+                        userInfo: notificationInfo.map { var d = $0; d["direction"] = KytosSplitDirection.vertical; return d }
+                    )
+                    return nil
                 case 5: // Shift+Cmd+G — previous search match
                     NotificationCenter.default.post(
-                        name: NSNotification.Name("KytosSearchPrevious"),
+                        name: .kytosSearchPrevious,
                         object: targetWindow,
                         userInfo: notificationInfo
+                    )
+                    return nil
+                case 36: // Cmd+Shift+Return — toggle split zoom
+                    NotificationCenter.default.post(
+                        name: .kytosTerminalEqualizeSplits,
+                        object: targetWindow,
+                        userInfo: notificationInfo
+                    )
+                    return nil
+                default:
+                    break
+                }
+            }
+            if baseFlags == [.control, .command] {
+                switch event.keyCode {
+                case 33: // Ctrl+Cmd+[ — previous split
+                    NotificationCenter.default.post(
+                        name: .kytosTerminalGotoSplit,
+                        object: targetWindow,
+                        userInfo: notificationInfo.map { var d = $0; d["direction"] = KytosGotoSplitDirection.previous.rawValue; return d }
+                    )
+                    return nil
+                case 30: // Ctrl+Cmd+] — next split
+                    NotificationCenter.default.post(
+                        name: .kytosTerminalGotoSplit,
+                        object: targetWindow,
+                        userInfo: notificationInfo.map { var d = $0; d["direction"] = KytosGotoSplitDirection.next.rawValue; return d }
+                    )
+                    return nil
+                default:
+                    break
+                }
+            }
+            if baseFlags == [.option, .command] {
+                switch event.keyCode {
+                case 126: // Option+Cmd+Up — focus split above
+                    NotificationCenter.default.post(
+                        name: .kytosTerminalGotoSplit,
+                        object: targetWindow,
+                        userInfo: notificationInfo.map { var d = $0; d["direction"] = KytosGotoSplitDirection.up.rawValue; return d }
+                    )
+                    return nil
+                case 125: // Option+Cmd+Down — focus split below
+                    NotificationCenter.default.post(
+                        name: .kytosTerminalGotoSplit,
+                        object: targetWindow,
+                        userInfo: notificationInfo.map { var d = $0; d["direction"] = KytosGotoSplitDirection.down.rawValue; return d }
+                    )
+                    return nil
+                case 123: // Option+Cmd+Left — focus split left
+                    NotificationCenter.default.post(
+                        name: .kytosTerminalGotoSplit,
+                        object: targetWindow,
+                        userInfo: notificationInfo.map { var d = $0; d["direction"] = KytosGotoSplitDirection.left.rawValue; return d }
+                    )
+                    return nil
+                case 124: // Option+Cmd+Right — focus split right
+                    NotificationCenter.default.post(
+                        name: .kytosTerminalGotoSplit,
+                        object: targetWindow,
+                        userInfo: notificationInfo.map { var d = $0; d["direction"] = KytosGotoSplitDirection.right.rawValue; return d }
                     )
                     return nil
                 default:
@@ -361,7 +439,6 @@ struct KytosWindowView: View {
         registry.register(category: "Terminal", label: "Increase Font Size", shortcut: "⌘= / ⌘+")
         registry.register(category: "Terminal", label: "Decrease Font Size", shortcut: "⌘-")
         registry.register(category: "Terminal", label: "Reset Font Size", shortcut: "⌘0 / ⌘R")
-        registry.register(category: "Terminal", label: "Reload Ghostty Config", shortcut: "⇧⌘,")
         self._keybindingRegistry = State(initialValue: registry)
     }
 
@@ -461,24 +538,31 @@ struct KytosWindowView: View {
         .environment(workspace)
         .focusedSceneValue(\.kytosFocusedWindowID, stableID)
         .background { WindowRegistrar(windowID: stableID) }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyNewTab"))) { notif in
+        .onReceive(NotificationCenter.default.publisher(for: .kytosTerminalNewTab)) { notif in
             guard notificationTargetsCurrentWindow(notif) else { return }
             let newWindowID = UUID()
             openWindow(id: "main", value: newWindowID)
             tabWindow(newWindowID, intoWindowWithID: stableID)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyNewWindow"))) { notif in
+        .onReceive(NotificationCenter.default.publisher(for: .kytosTerminalNewWindow)) { notif in
             guard notificationTargetsCurrentWindow(notif) else { return }
             openWindow(id: "main", value: UUID())
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttySetTitle"))) { notif in
+        .onReceive(NotificationCenter.default.publisher(for: .kytosTerminalSetTitle)) { notif in
             guard notificationTargetsCurrentWindow(notif) else { return }
-            // SET_TITLE fires on preexec (command launch) and precmd (prompt return)
+            if let sourceView = notif.object as? KytosTerminalView,
+               let paneID = sourceView.paneID,
+               let title = notif.userInfo?["title"] as? String, !title.isEmpty {
+                let focusedID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
+                if paneID == focusedID {
+                    windowShellState.title = title
+                }
+            }
             ProcessMonitor.shared.requestRefresh()
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("KytosGhosttyPwd"))) { notif in
+        .onReceive(NotificationCenter.default.publisher(for: .kytosTerminalPwd)) { notif in
             guard notificationTargetsCurrentWindow(notif) else { return }
-            if let sourceView = notif.object as? KytosGhosttyView,
+            if let sourceView = notif.object as? KytosTerminalView,
                let paneID = sourceView.paneID {
                 let focusedID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
                 if paneID == focusedID {
@@ -520,7 +604,14 @@ struct KytosWindowView: View {
     private func updateToolbar(workspace: KytosWorkspace) {
         let id = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
         if let pane = workspace.splitTree.findPane(id) {
-            let newTitle = pane.processName.isEmpty ? "Kytos" : pane.processName
+            let newTitle: String
+            if !pane.processName.isEmpty {
+                newTitle = pane.processName
+            } else if !pane.title.isEmpty {
+                newTitle = pane.title
+            } else {
+                newTitle = "Kytos"
+            }
             let newSubtitle = pane.pwd.isEmpty ? "" : abbreviatePath(pane.pwd)
             windowShellState.title = newTitle
             windowShellState.subtitle = newSubtitle
@@ -542,7 +633,7 @@ struct KytosWindowView: View {
         if let window = notification.object as? NSWindow {
             return appModel.windowID(for: window) == stableID
         }
-        if let sourceView = notification.object as? KytosGhosttyView {
+        if let sourceView = notification.object as? KytosTerminalView {
             return appModel.windowID(for: sourceView.window) == stableID
         }
         return false
@@ -552,7 +643,7 @@ struct KytosWindowView: View {
         let paneID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
         DispatchQueue.main.async {
             guard let window = appModel.window(for: stableID),
-                  let view = KytosGhosttyView.view(for: paneID),
+                  let view = KytosTerminalView.view(for: paneID),
                   view.window === window else {
                 guard attemptsRemaining > 0 else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {

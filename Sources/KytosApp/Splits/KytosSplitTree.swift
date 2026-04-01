@@ -491,7 +491,7 @@ public final class KytosSplitTree: Codable, @unchecked Sendable {
     }
 
     /// Find the geometric neighbor from a given pane in the specified direction.
-    /// Uses edge-based filtering (like ghostty): a pane is "to the left" only if its
+    /// Uses edge-based filtering: a pane is "to the left" only if its
     /// right edge is at or left of the source's left edge. Distance is measured from
     /// top-left corners.
     public func geometricNeighbor(from paneID: UUID, direction: SpatialDirection, in bounds: CGRect) -> UUID? {

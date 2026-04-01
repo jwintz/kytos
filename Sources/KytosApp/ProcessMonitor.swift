@@ -70,7 +70,7 @@ final class ProcessMonitor {
         for ws in allWorkspaces {
             allPanes.append(contentsOf: ws.splitTree.allPanes)
         }
-        let childPids = KytosGhosttyView.childPids
+        let childPids = KytosTerminalView.childPids
 
         let result = await Task.detached { () -> ([(UUID, String)], [pid_t: KytosProcessUtil.PSEntry]) in
             let snapshot = KytosProcessUtil.psSnapshot()

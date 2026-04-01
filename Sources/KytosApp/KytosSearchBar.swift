@@ -1,9 +1,8 @@
 // KytosSearchBar.swift — Scrollback search overlay (Cmd+F)
 
 import SwiftUI
-import GhosttyKit
 
-/// Observable state for the search overlay, driven by ghostty search actions.
+/// Observable state for the search overlay, driven by SwiftTerm search results.
 @Observable
 @MainActor
 final class KytosSearchState {
@@ -24,7 +23,7 @@ final class KytosSearchState {
 }
 
 /// Search bar overlay for terminal scrollback search.
-/// Activated by Cmd+F or ghostty's search keybinding.
+/// Activated by Cmd+F. Uses SwiftTerm's built-in findNext/findPrevious API.
 struct KytosSearchBar: View {
     @Bindable var state: KytosSearchState
     @Environment(KytosWorkspace.self) private var workspace
@@ -46,7 +45,6 @@ struct KytosSearchBar: View {
                         performSearch(newValue)
                     }
 
-                // Always show match count when there's a query
                 if !state.query.isEmpty {
                     if state.totalMatches > 0 {
                         Text("\(state.selectedMatch + 1)/\(state.totalMatches)")
@@ -102,49 +100,45 @@ struct KytosSearchBar: View {
         }
     }
 
-    private var focusedSurface: ghostty_surface_t? {
+    private var focusedTerminalView: KytosTerminalView? {
         let paneID = workspace.focusedPaneID ?? workspace.splitTree.firstLeaf.id
-        return KytosGhosttyView.view(for: paneID)?.surface
+        return KytosTerminalView.view(for: paneID)
     }
 
     private func performSearch(_ query: String) {
-        guard !query.isEmpty, let surface = focusedSurface else {
+        guard !query.isEmpty, let view = focusedTerminalView else {
             if query.isEmpty {
                 state.totalMatches = 0
                 state.selectedMatch = 0
+                focusedTerminalView?.endSearch()
             }
             return
         }
-        let searchCmd = "search:\(query)"
-        searchCmd.withCString { ptr in
-            _ = ghostty_surface_binding_action(surface, ptr, UInt(searchCmd.utf8.count))
-        }
+        let found = view.searchForward(query)
+        // SwiftTerm doesn't provide match counts directly;
+        // we track whether at least one match was found.
+        state.totalMatches = found ? 1 : 0
+        state.selectedMatch = 0
     }
 
     private func nextMatch() {
-        guard let surface = focusedSurface else { return }
-        let cmd = "navigate_search:next"
-        cmd.withCString { ptr in
-            _ = ghostty_surface_binding_action(surface, ptr, UInt(cmd.utf8.count))
+        guard let view = focusedTerminalView, !state.query.isEmpty else { return }
+        let found = view.searchForward(state.query)
+        if found && state.totalMatches > 0 {
+            state.selectedMatch = (state.selectedMatch + 1) % max(1, state.totalMatches)
         }
     }
 
     private func previousMatch() {
-        guard let surface = focusedSurface else { return }
-        let cmd = "navigate_search:previous"
-        cmd.withCString { ptr in
-            _ = ghostty_surface_binding_action(surface, ptr, UInt(cmd.utf8.count))
+        guard let view = focusedTerminalView, !state.query.isEmpty else { return }
+        let found = view.searchBackward(state.query)
+        if found && state.totalMatches > 0 {
+            state.selectedMatch = max(0, state.selectedMatch - 1)
         }
     }
 
     private func dismiss() {
-        // Tell ghostty to clear its search state
-        if let surface = focusedSurface {
-            let cmd = "end_search"
-            cmd.withCString { ptr in
-                _ = ghostty_surface_binding_action(surface, ptr, UInt(cmd.utf8.count))
-            }
-        }
+        focusedTerminalView?.endSearch()
         state.isVisible = false
         state.query = ""
         state.totalMatches = 0

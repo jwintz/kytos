@@ -13,7 +13,7 @@ struct KytosSplitTreeView: View {
             .onChange(of: focusedPaneID) { _, newID in
                 guard let newID else { return }
                 DispatchQueue.main.async {
-                    if let view = KytosGhosttyView.view(for: newID) {
+                    if let view = KytosTerminalView.view(for: newID) {
                         view.window?.makeFirstResponder(view)
                     }
                 }
@@ -98,7 +98,7 @@ private struct KytosSplitNodeView: View {
                     }
                 }
 
-                // Zone-specific drop overlay (like ghostty) — suppress on source pane
+                // Zone-specific drop overlay — suppress on source pane
                 if !isSelfDragging, let zone = dropZone {
                     zoneOverlay(zone: zone, in: geometry)
                         .allowsHitTesting(false)
@@ -159,7 +159,7 @@ private struct KytosSplitNodeView: View {
     }
 }
 
-// MARK: - Drop Delegate (tracks zone as cursor moves, like ghostty)
+// MARK: - Drop Delegate (tracks zone as cursor moves)
 
 private struct KytosSplitDropDelegate: DropDelegate {
     @Binding var dropZone: KytosSplitDropZone?

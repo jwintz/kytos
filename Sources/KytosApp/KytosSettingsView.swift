@@ -19,27 +19,41 @@ struct KytosSettingsWindowView: View {
 
 private struct KytosTerminalSettingsTab: View {
     @State private var settings = KytosSettings.shared
+    @State private var monoFonts: [String] = []
 
     var body: some View {
         Form {
-            Section("Terminal Configuration") {
-                Button("Open Ghostty Config") {
-                    let configPath = FileManager.default.homeDirectoryForCurrentUser
-                        .appendingPathComponent(".config/ghostty/config")
-                    // Create config dir if needed
-                    let dir = configPath.deletingLastPathComponent()
-                    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                    // Create empty config if it doesn't exist
-                    if !FileManager.default.fileExists(atPath: configPath.path) {
-                        FileManager.default.createFile(atPath: configPath.path, contents: "# Ghostty configuration\n# See: https://ghostty.org/docs/config\n".data(using: .utf8))
+            Section("Font") {
+                Picker("Family", selection: $settings.fontFamily) {
+                    ForEach(monoFonts, id: \.self) { family in
+                        Text(family).tag(family)
                     }
-                    NSWorkspace.shared.open(configPath)
                 }
-                .help("Font, colors, cursor, and all terminal settings are configured in ~/.config/ghostty/config")
+                HStack {
+                    Text("Size")
+                    Slider(value: $settings.fontSize, in: 6...24, step: 1)
+                    Text("\(Int(settings.fontSize)) pt")
+                        .monospacedDigit()
+                        .frame(width: 40, alignment: .trailing)
+                }
+                Picker("Cursor", selection: $settings.cursorShape) {
+                    ForEach(KytosCursorShape.allCases, id: \.rawValue) { shape in
+                        Text(shape.rawValue).tag(shape.rawValue)
+                    }
+                }
+            }
 
-                Text("Terminal appearance is managed by Ghostty's configuration file.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            Section("Color Scheme") {
+                Picker("Scheme", selection: $settings.colorSchemeName) {
+                    ForEach(KytosColorScheme.allCases, id: \.rawValue) { scheme in
+                        Text(scheme.rawValue).tag(scheme.rawValue)
+                    }
+                }
+                .onChange(of: settings.colorSchemeName) { _, newValue in
+                    if let scheme = KytosColorScheme(rawValue: newValue) {
+                        KytosTerminalPalette.shared.applyScheme(scheme)
+                    }
+                }
             }
 
             Section("User Interface") {
@@ -60,5 +74,11 @@ private struct KytosTerminalSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            monoFonts = KytosSettings.monospacedFontFamilies
+            if !monoFonts.contains(settings.fontFamily) {
+                monoFonts.insert(settings.fontFamily, at: 0)
+            }
+        }
     }
 }

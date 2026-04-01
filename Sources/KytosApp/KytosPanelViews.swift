@@ -2,7 +2,6 @@
 
 import SwiftUI
 import Foundation
-import GhosttyKit
 import os
 
 // MARK: - Sessions Sidebar
@@ -128,7 +127,7 @@ private struct KytosPaneRowView: View {
             // Close button (visible on hover)
             if isHovering {
                 Button {
-                    KytosGhosttyView.view(for: pane.id)?.closeSurface()
+                    KytosTerminalView.view(for: pane.id)?.closeSurface()
                     if workspace.splitTree.isSplit {
                         if let newFocusID = workspace.splitTree.remove(paneID: pane.id) {
                             workspace.focusedPaneID = newFocusID
@@ -726,7 +725,7 @@ final class KytosProcessMonitor {
     private(set) var processInfo: KytosProcessInfo?
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var isVisible = false
-    @ObservationIgnored private weak var targetView: KytosGhosttyView?
+    @ObservationIgnored private weak var targetView: KytosTerminalView?
     @ObservationIgnored private var prevCPUTime: UInt64 = 0
     @ObservationIgnored private var prevSampleTime: CFAbsoluteTime = 0
     @ObservationIgnored private var pollTask: Task<Void, Never>?
@@ -742,7 +741,7 @@ final class KytosProcessMonitor {
         }
     }
 
-    func setView(_ view: KytosGhosttyView?) {
+    func setView(_ view: KytosTerminalView?) {
         targetView = view
         prevCPUTime = 0
         prevSampleTime = 0

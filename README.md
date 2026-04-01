@@ -1,6 +1,6 @@
 # Kytos
 
-A terminal emulator for macOS built on [libghostty](https://github.com/ghostty-org/ghostty) and [KelyphosKit](https://github.com/jwintz/kelyphos).
+A terminal emulator for macOS built on [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) and [KelyphosKit](https://github.com/jwintz/kelyphos).
 
 **[Documentation](https://jwintz.github.io/kytos)**
 
@@ -9,12 +9,11 @@ A terminal emulator for macOS built on [libghostty](https://github.com/ghostty-o
 - macOS 26+ (Tahoe)
 - [pixi](https://pixi.sh) package manager
 - Xcode with macOS 26 SDK
-- Ghostty source at `~/Syntropment/ghostty` (for building GhosttyKit)
 
 ## Quick Start
 
 ```bash
-pixi run build    # Build GhosttyKit + generate Xcode project + compile
+pixi run build    # Generate Xcode project + compile
 pixi run run      # Build if needed + launch the app
 ```
 
@@ -24,10 +23,9 @@ All build operations use `pixi run <task>`. Run `pixi task list` to see all avai
 
 | Task | Description |
 |------|-------------|
-| `build-ghostty` | Build `GhosttyKit.xcframework` from Ghostty source (zig + arm64) |
 | `generate` | Regenerate the Xcode project from `project.yml` (XcodeGen) |
 | `generate-if-needed` | Regenerate only when `project.yml` is newer than the project |
-| `build` | Full build: ghostty + generate + xcodebuild (Debug) |
+| `build` | Full build: generate + xcodebuild (Debug) |
 | `build-if-needed` | Incremental build — skips if binary is up to date |
 | `run` | Build if needed + launch `Kytos.app` |
 | `test` | Run `Scripts/run-tests.sh` against the `Kytos-Tests` scheme |
@@ -67,7 +65,7 @@ pixi run notarize       # → submit, wait, staple
 ```
 
 **Build details:**
-- `build-release` passes `ARCHS=arm64` (GhosttyKit is arm64-only) and `CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO` (strips `com.apple.security.get-task-allow` which blocks notarization)
+- `build-release` passes `CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO` (strips `com.apple.security.get-task-allow` which blocks notarization)
 - `sign` with a `SIGN_IDENTITY` signs each Mach-O binary individually with `--options runtime --timestamp` (hardened runtime + secure timestamp, both required by notarization)
 - Without `SIGN_IDENTITY`, `sign` defaults to ad-hoc (`codesign --force --deep --sign -`) for local testing
 
@@ -85,19 +83,12 @@ pixi run changelog        # Generate changelog since last git tag
 
 | Component | Role |
 |-----------|------|
-| **libghostty** | Terminal emulation, Metal rendering, PTY management, splits |
+| **SwiftTerm** | Terminal emulation, PTY management, text rendering (via SPM) |
 | **KelyphosKit** | Shell UI — navigator, inspector, utility panels, keybindings |
-| **tmux** | User-facing multiplexer (available via pixi PATH, no app integration) |
 
 ### Terminal Configuration
 
-Terminal settings (font, colors, cursor, keybindings) are managed via Ghostty's config file:
-
-```
-~/.config/ghostty/config
-```
-
-The Settings window provides an "Open Ghostty Config" button for quick access. Kytos-specific UI preferences (e.g. horizontal margin) are separate and stored in UserDefaults.
+Terminal appearance (font, colors, cursor) is managed by Kytos internally. The default font is SF Mono 13pt with a dark/light ANSI color palette that follows the system appearance. Kytos-specific UI preferences (e.g. horizontal margin, focus-follows-mouse) are stored in UserDefaults.
 
 ### Source Files
 
@@ -109,10 +100,9 @@ Sources/KytosApp/
   KytosSettingsView.swift         # Settings window
   KytosPanelViews.swift           # Inspector panels
   Splits/                         # Split tree model + recursive split views
-  Ghostty/
-    KytosGhosttyApp.swift         # ghostty_app_t wrapper, C callbacks
-    KytosGhosttyView.swift        # ghostty_surface_t NSView, keyboard/mouse/IME
-    KytosTerminalRepresentable.swift  # SwiftUI bridge (NSViewRepresentable)
+  Terminal/
+    KytosTerminalView.swift       # LocalProcessTerminalView subclass, key/mouse/font/search
+    KytosTerminalRepresentable.swift  # SwiftUI bridge, delegate, color theming
 Sources/KytosWidget/              # macOS widget extension + shared widget snapshot model
 Sources/KytosTests/               # Unit tests
 Kytos.icon/                       # macOS .icon package compiled by actool
@@ -120,9 +110,8 @@ Kytos.icon/                       # macOS .icon package compiled by actool
 
 ### Key Patterns
 
-- **`KytosGhosttyApp`** — `@Observable @MainActor` singleton wrapping `ghostty_app_t`. Owns config, runtime C callbacks (wakeup, action, clipboard, close), and the app tick loop.
-- **`KytosGhosttyView`** — `NSView` subclass wrapping `ghostty_surface_t`. Handles Metal layer, keyboard/mouse forwarding, and IME via `NSTextInputClient`.
-- **`KytosTerminalRepresentable`** — Thin `NSViewRepresentable` bridging `KytosGhosttyView` into SwiftUI.
+- **`KytosTerminalView`** — `LocalProcessTerminalView` subclass. Handles key interception, drag-and-drop, font scaling, focus management, search, and shell process lifecycle. Registers a custom OSC 9 handler for progress reporting.
+- **`KytosTerminalRepresentable`** — `NSViewRepresentable` bridging `KytosTerminalView` into SwiftUI. Coordinator implements `LocalProcessTerminalViewDelegate` for title/PWD notifications.
 - **`KytosWorkspace`** — `@Observable` model holding a split tree of panes plus the currently focused pane for one native window/tab.
 - **`KytosAppModel`** — Manages window-to-workspace mapping, persistence, widget snapshots, and native macOS tab restoration.
 
@@ -168,32 +157,29 @@ Force-reload widget after rebuild (kills cached process and re-registers extensi
 killall KytosWidget 2>/dev/null; pluginkit -e use -i me.jwintz.Kytos.KytosWidget
 ```
 
-### Shell Integration & Resource Detection
+### Shell Integration
 
-Ghostty's shell integration injects OSC escape sequences into bash/zsh/fish/elvish/nushell so the terminal receives live updates: OSC 0/2 for the process title, OSC 7 for the working directory. These drive the dynamic toolbar title/subtitle and navigator pane labels.
+Kytos provides shell integration scripts for bash, zsh, and fish that emit standard OSC escape sequences:
 
-**Sentinel file** — On startup, libghostty walks up from the executable path looking for a **sentinel file** at:
+- **OSC 7** — Reports the working directory to the terminal (drives toolbar subtitle and navigator pane labels)
+- **OSC 133** — Marks prompt/command zones (semantic prompt marking)
+- **OSC 2** — Sets the terminal title (drives window/tab titles)
+- **OSC 9;4** — Reports command progress (drives the progress bar overlay)
 
+For zsh, integration is auto-injected via `ZDOTDIR`. For bash and fish, source the appropriate script from your shell config:
+
+```bash
+# bash (~/.bashrc)
+[ -n "$KYTOS_SHELL_INTEGRATION_DIR" ] && source "$KYTOS_SHELL_INTEGRATION_DIR/bash/kytos.bash"
+
+# fish (~/.config/fish/config.fish)
+[ -n "$KYTOS_SHELL_INTEGRATION_DIR" ] && source "$KYTOS_SHELL_INTEGRATION_DIR/fish/vendor_conf.d/kytos-shell-integration.fish"
 ```
-<ancestor>/Contents/Resources/terminfo/78/xterm-ghostty
-```
 
-The `78/` directory is terminfo's standard hash bucket (`0x78` = `'x'`, for `xterm-ghostty`). If found, ghostty sets its `resources_dir` to `<ancestor>/Contents/Resources/ghostty`, which must contain the `shell-integration/` scripts.
-
-For Kytos, these resources live at:
-
-```
-Kytos.app/Contents/Resources/
-  terminfo/78/xterm-ghostty      ← sentinel (enables resource detection)
-  ghostty/shell-integration/     ← bash, zsh, fish, elvish, nushell scripts
-```
-
-They are copied into the app bundle by the "Copy Ghostty Resources" pre-build script in `project.yml`, sourced from `Resources/` in the repo (which `pixi run build-ghostty` populates from ghostty's `zig-out/share/`).
-
-**Default config files** — `ghostty_config_load_default_files()` (called in `KytosGhosttyApp.init`) loads the user's terminal configuration from ghostty's standard locations (`~/.config/ghostty/config`, XDG paths). This is why all terminal settings (font, colors, cursor, keybindings) are configured via ghostty's own config file rather than Kytos-specific preferences.
+Shell integration scripts are bundled in the app at `Kytos.app/Contents/Resources/kytos/shell-integration/`.
 
 ### Build Pipeline
 
-1. **GhosttyKit** — Built from Ghostty source via `zig build` (arm64, ReleaseFast). Produces `Frameworks/GhosttyKit.xcframework` (static library, git-ignored).
-2. **XcodeGen** — `project.yml` defines targets, dependencies, and build settings. Generates `Kytos.xcodeproj` (git-ignored).
-3. **xcodebuild** — Compiles Swift 6 sources, links GhosttyKit + Carbon + KelyphosKit, produces `Kytos.app`.
+1. **XcodeGen** — `project.yml` defines targets, dependencies, and build settings. Generates `Kytos.xcodeproj` (git-ignored).
+2. **SPM Resolution** — SwiftTerm is fetched as a Swift Package dependency (from `https://github.com/migueldeicaza/SwiftTerm.git`, version 1.11.0+).
+3. **xcodebuild** — Compiles Swift 6 sources, links SwiftTerm + Carbon + KelyphosKit, produces `Kytos.app`.

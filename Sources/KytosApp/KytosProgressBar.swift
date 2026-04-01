@@ -1,26 +1,24 @@
 // KytosProgressBar.swift — Graphical progress bar for terminal commands
-// Backported from ghostty's SurfaceProgressBar.swift
 
 import SwiftUI
-import GhosttyKit
 
 /// A thin progress bar overlaid on a terminal surface, driven by
-/// GHOSTTY_ACTION_PROGRESS_REPORT OSC sequences from the shell.
+/// OSC 9;4 progress report sequences from the shell.
 struct KytosProgressBar: View {
-    let state: UInt32  // ghostty_action_progress_report_state_e raw value
+    let state: UInt32  // KytosProgressState raw value
     let progress: Int8 // -1 if no progress reported, 0-100 otherwise
 
     private var color: SwiftUI.Color {
         switch state {
-        case GHOSTTY_PROGRESS_STATE_ERROR.rawValue: return .red
-        case GHOSTTY_PROGRESS_STATE_PAUSE.rawValue: return .orange
+        case KytosProgressState.error.rawValue: return .red
+        case KytosProgressState.pause.rawValue: return .orange
         default: return .accentColor
         }
     }
 
     private var resolvedProgress: UInt8? {
         if progress >= 0 { return UInt8(progress) }
-        if state == GHOSTTY_PROGRESS_STATE_PAUSE.rawValue { return 100 }
+        if state == KytosProgressState.pause.rawValue { return 100 }
         return nil
     }
 
